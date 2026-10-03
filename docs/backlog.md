@@ -76,6 +76,10 @@ receipt token, so the two audiences cannot silently diverge.
 
 ### PG-101: syntax-aware inline test detection
 
+Status: not started. Detection of likely inline `#[cfg(test)]` edits is still the
+line-based heuristic in `GitRepo::inline_test_hints`, which reports a file as a
+hint rather than parsing it.
+
 Use a Rust parser to identify changed functions/tests inside `#[cfg(test)]` modules without classifying unrelated production edits as test edits.
 
 **Non-goal:** transplant yet.
@@ -88,22 +92,35 @@ This is difficult; require an ADR before choosing AST rewrite vs patch-hunk reco
 
 ### PG-103: targeted cargo test adapter
 
-Identify test names and run changed dedicated tests when possible. Preserve a configurable full-suite phase separately; never silently replace full-suite evidence.
+Status: done in 1.0, opt-in. `witdiff_core::selection` narrows a cargo test
+command to the cargo targets of the changed dedicated tests, gated on
+`verification.targeted_test_selection` (default `false`).
+
+Full-suite evidence is preserved, never silently replaced: when the command
+cannot be narrowed without changing what cargo runs — notably under
+`--all-targets`, which overrides `--test` — the full suite runs and a note
+records why. The receipt states which variant produced the evidence via
+`test_selection` and `effective_test_command`. See ADR-0008.
 
 ## P2 — test integrity
 
 ### PG-201: AST assertion-delta analyzer
 
-Detect:
+Status: mostly done in 1.0. Shipped as `witdiff_core::rustanalysis`, producing
+`removed_assertion`, `weakened_assertion`, `changed_expected_value`,
+`removed_test`, `trivial_assertion`, `ignored_test`, `added_should_panic`,
+`test_source_unparsable`, and the informational `unignored_test` /
+`empty_test_body`. Every finding carries a rule ID and a line number.
 
-- removed assertions;
-- equality -> broad predicate weakening;
-- changed expected constants;
-- removed error checks;
-- new `#[ignore]`/`#[should_panic]`;
-- mock substitution around changed behavior.
+Still open from the original list:
 
-Every finding must include source location and rule ID.
+- removed error checks (a distinct rule from removed assertions);
+- mock substitution around changed behavior;
+- removed match arms (see `docs/roadmap.md`, M2).
+
+The analyzer does not resolve `let` bindings, so an assertion rewritten as
+`assert_eq!(compute(), 4)` -> `assert_eq!(v, 4)` is reported as a removal. That
+is deliberate and conservative, not an oversight.
 
 ### PG-202: policy configuration
 

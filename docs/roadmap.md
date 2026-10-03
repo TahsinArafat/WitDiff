@@ -39,9 +39,10 @@ The roadmap is organized around proof quality, not feature count.
 ## M2 — Rust-aware test analysis
 
 - [x] parse Rust syntax instead of line heuristics
-- [x] detect weakened comparisons, removed match arms, changed expected values
+- [x] detect weakened comparisons and changed expected values
 - [x] associate changed tests with test names
 - [x] run only changed tests where equivalence is safe
+- [ ] detect removed match arms
 - [ ] support inline `#[cfg(test)] mod tests` transplant safely
 
 See ADR-0006 (structural analysis), ADR-0007 (test-only transplant boundary),
