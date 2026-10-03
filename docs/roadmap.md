@@ -42,8 +42,7 @@ The roadmap is organized around proof quality, not feature count.
 - [x] detect weakened comparisons, changed expected values, removed match arms
 - [x] associate changed tests with test names
 - [x] run only changed tests where equivalence is safe
-- [ ] support inline `#[cfg(test)] mod tests` transplant safely — design settled
-  in ADR-0010 (span splicing with explicit fallbacks); not yet implemented
+- [x] support inline `#[cfg(test)] mod tests` transplant safely (ADR-0010)
 
 See ADR-0006 (structural analysis), ADR-0007 (test-only transplant boundary),
 ADR-0008 (targeted selection refuses rather than approximates), ADR-0009

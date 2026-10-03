@@ -1,6 +1,6 @@
 # ADR-0010: Inline `#[cfg(test)]` test transplantation by span splicing
 
-Status: proposed
+Status: accepted
 
 ## Context
 

@@ -322,6 +322,19 @@ fn print_receipt_summary(receipt: &Receipt) {
             );
         }
     }
+    for entry in &receipt.spliced_inline_tests {
+        println!(
+            "  spliced          : {} (inline test modules: {})",
+            entry.path,
+            entry.modules.join(", ")
+        );
+    }
+    for entry in &receipt.refused_inline_tests {
+        println!(
+            "  not spliced      : {} [{}] {}",
+            entry.path, entry.reason, entry.explanation
+        );
+    }
     for note in &receipt.notes {
         println!("  note             : {note}");
     }

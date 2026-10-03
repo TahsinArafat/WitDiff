@@ -115,6 +115,20 @@
       "items": {
         "type": "string"
       }
+    },
+    "spliced_inline_tests": {
+      "description": "Inline #[cfg(test)] test modules transplanted by span splicing. Each entry names the file and the module paths that were moved. The file exists in neither revision: its production code is the base revision's and its test module is the head revision's. See ADR-0010.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/spliced_inline_tests"
+      }
+    },
+    "refused_inline_tests": {
+      "description": "Files that carry inline test changes which could not be transplanted, with the precondition that failed. Recorded so a reader can distinguish 'WitDiff declined to splice this' from 'WitDiff did not consider it'.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/refused_inline_tests"
+      }
     }
   },
   "$defs": {
@@ -219,6 +233,55 @@
         "timed_out": {
           "type": "boolean",
           "description": "True when the run was killed for exceeding verification.timeout_secs. A timed-out run is never a proof."
+        }
+      }
+    },
+    "spliced_inline_tests": {
+      "type": "object",
+      "required": [
+        "path",
+        "modules"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Repository-relative path of the spliced file."
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Module paths transplanted, e.g. 'tests'."
+        }
+      }
+    },
+    "refused_inline_tests": {
+      "type": "object",
+      "required": [
+        "path",
+        "reason",
+        "explanation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "unparsable",
+            "no_test_module_in_head",
+            "no_counterpart_in_base",
+            "test_outside_test_module",
+            "change_outside_test_module"
+          ]
+        },
+        "explanation": {
+          "type": "string",
+          "description": "Operator-facing explanation of the failed precondition."
         }
       }
     }

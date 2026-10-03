@@ -429,6 +429,42 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Write `contents` over a path inside a worktree, creating parents.
+    ///
+    /// Used by the inline-test splice (ADR-0010), which produces a file that
+    /// exists in neither revision and therefore cannot be copied or patched.
+    pub fn write_into_worktree(
+        &self,
+        worktree: &Path,
+        relative: &str,
+        contents: &str,
+    ) -> Result<()> {
+        let destination = worktree.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed creating {}", parent.display()))?;
+        }
+        fs::write(&destination, contents).with_context(|| {
+            format!(
+                "failed writing spliced inline tests to base worktree: {}",
+                destination.display()
+            )
+        })
+    }
+
+    /// Read a repository-relative path from the working tree.
+    ///
+    /// Returns `None` when the path is absent or is not valid UTF-8, because a
+    /// source file that cannot be decoded as text cannot be parsed or spliced.
+    pub fn worktree_source(&self, relative: &str) -> Result<Option<String>> {
+        match fs::read(self.root.join(relative)) {
+            Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error)
+                .with_context(|| format!("failed reading working-tree source for {relative}")),
+        }
+    }
+
     pub fn workspace_fingerprint(&self, base: &str) -> Result<String> {
         let mut hasher = Sha256::new();
         let diff = self.git_bytes(["diff", "--binary", base, "--"])?;
@@ -455,23 +491,33 @@ impl GitRepo {
         Ok(hex::encode(hasher.finalize()))
     }
 
+    /// Production `.rs` files whose change may involve an inline test module.
+    ///
+    /// The earlier version of this check looked for marker substrings
+    /// (`#[test]`, `assert!(`, …) on added or removed lines. That misses the
+    /// common cases it exists to catch: a changed assertion body
+    /// (`is_even(3)` becoming `is_even(4)`) contains no marker at all, and a
+    /// file that merely *has* a test module while its production code changes
+    /// contains markers on no changed line.
+    ///
+    /// The check is structural instead. A file is a candidate when it parses and
+    /// contains a `#[cfg(test)]` module, and something in it changed. Whether
+    /// that change is confined to the module — and can therefore be spliced —
+    /// is decided later, by the code that has both revisions to compare
+    /// (ADR-0010).
     pub fn inline_test_hints(&self, base: &str, changed: &[ChangedFile]) -> Result<Vec<String>> {
         let mut hints = Vec::new();
         for file in changed.iter().filter(|f| {
             f.path.ends_with(".rs") && !f.is_test && !matches!(f.kind, ChangeKind::Deleted)
         }) {
-            let diff = self.diff_text_for_path(base, &file.path)?;
-            if diff.lines().any(|line| {
-                (line.starts_with('+') || line.starts_with('-'))
-                    && !line.starts_with("+++")
-                    && !line.starts_with("---")
-                    && (line.contains("#[test]")
-                        || line.contains("#[cfg(test)]")
-                        || line.contains("mod tests")
-                        || line.contains("assert!(")
-                        || line.contains("assert_eq!(")
-                        || line.contains("assert_ne!("))
-            }) {
+            // The head revision is what is on disk; the base revision is read
+            // from Git. Either may fail to parse, in which case the file is not
+            // a candidate for a structural splice.
+            let head_source = fs::read_to_string(self.root.join(&file.path)).unwrap_or_default();
+            if crate::inline::test_module_identities(&head_source).is_empty() {
+                continue;
+            }
+            if !self.diff_text_for_path(base, &file.path)?.trim().is_empty() {
                 hints.push(file.path.clone());
             }
         }

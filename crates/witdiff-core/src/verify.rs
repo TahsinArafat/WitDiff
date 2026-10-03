@@ -9,8 +9,9 @@ use crate::{
     git::{GitRepo, WorktreeGuard},
     integrity::analyze_test_diff,
     model::{
-        ChangeKind, FailureKind, InspectReport, IntegrityFinding, Receipt, RunResult, Severity,
-        TestSelection, VerificationStatus,
+        ChangeKind, ChangedFile, FailureKind, InspectReport, IntegrityFinding, Receipt,
+        RefusedInlineTests, RunResult, Severity, SplicedInlineTests, TestSelection,
+        VerificationStatus,
     },
     runner::{run, CommandSpec},
     rustanalysis::analyze_rust_test_change,
@@ -112,26 +113,26 @@ pub fn verify_repository(
         timeout,
     )?;
 
+    let mut splice_notes: Vec<String> = Vec::new();
+    let mut spliced_inline_tests: Vec<SplicedInlineTests> = Vec::new();
+    let mut refused_inline_tests: Vec<RefusedInlineTests> = Vec::new();
+
     let mut notes = selection_notes;
+    notes.append(&mut splice_notes);
     if head_run.timed_out {
         notes.push(format!(
             "the test command exceeded the configured timeout of {} seconds and was terminated; this does not establish that the change is correct",
             config.verification.timeout_secs.unwrap_or_default()
         ));
     }
-    if !inspect.inline_test_hints.is_empty() {
-        notes.push(format!(
-            "possible inline Rust tests changed inside production files: {}; v0.1 does not transplant individual inline-test hunks onto the base revision",
-            inspect.inline_test_hints.join(", ")
-        ));
-    }
-
     let mut base_control_run = None;
     let mut base_run = None;
     let mut red_green_proven = false;
     let mut status = if !head_run.success {
         VerificationStatus::HeadFailed
-    } else if inspect.changed_test_files.is_empty() {
+    } else if inspect.changed_test_files.is_empty() && inspect.inline_test_hints.is_empty() {
+        // With no dedicated test *and* no inline-test candidate there is
+        // nothing to transplant, so no experiment can be run.
         VerificationStatus::NoChangedTests
     } else {
         let tmp = TempDir::new().context("failed to allocate temporary verification directory")?;
@@ -151,7 +152,7 @@ pub fn verify_repository(
         let experiment_result = match control_result {
             Ok(control) if control.success => {
                 base_control_run = Some(control);
-                (|| -> Result<Option<(RunResult, Vec<String>)>> {
+                (|| -> Result<Option<BaseExperiment>> {
                     let mut tracked_tests: Vec<String> = Vec::new();
                     let mut blocked_tests: Vec<String> = Vec::new();
                     for file in inspect.changed_files.iter().filter(|f| {
@@ -184,15 +185,35 @@ pub fn verify_repository(
                     let patch = repo.diff_for_paths(&base, &tracked_tests, 3)?;
                     repo.apply_patch(&worktree, &patch)?;
                     repo.copy_untracked_files(&worktree, &untracked_tests)?;
-                    Ok(Some((
-                        run(
+
+                    // Inline `#[cfg(test)]` modules live in production files, so
+                    // they were not part of the patch above. Splice them in
+                    // separately; a file that cannot be spliced safely is
+                    // recorded rather than approximated (ADR-0010).
+                    let mut spliced = Vec::new();
+                    let mut refused = Vec::new();
+                    splice_inline_tests_into(
+                        repo,
+                        &worktree,
+                        &base,
+                        &inspect.changed_files,
+                        &inspect.inline_test_hints,
+                        &mut blocked_tests,
+                        &mut spliced,
+                        &mut refused,
+                    )?;
+
+                    Ok(Some(BaseExperiment {
+                        result: run(
                             &command,
                             &worktree,
                             config.verification.max_output_bytes,
                             timeout,
                         )?,
                         blocked_tests,
-                    )))
+                        spliced,
+                        refused,
+                    }))
                 })()
             }
             Ok(control) => {
@@ -225,7 +246,14 @@ pub fn verify_repository(
 
         match experiment {
             None => VerificationStatus::NotVerified,
-            Some((result, blocked_tests)) => {
+            Some(BaseExperiment {
+                result,
+                blocked_tests,
+                spliced,
+                refused,
+            }) => {
+                spliced_inline_tests = spliced;
+                refused_inline_tests = refused;
                 for blocked in &blocked_tests {
                     notes.push(format!(
                         "changed test {blocked} was not transplanted: it was renamed from a non-test path or its name is not representable as UTF-8, so a test-only transplant could not be constructed for it"
@@ -274,6 +302,33 @@ pub fn verify_repository(
         }
     };
 
+    // Reported here rather than before the experiment: whether an inline test
+    // module could be transplanted is only known once the splice has been
+    // attempted. Checking earlier made the condition always true and produced
+    // this note for files that were in fact spliced.
+    let unspliced: Vec<&String> = inspect
+        .inline_test_hints
+        .iter()
+        .filter(|hint| {
+            !spliced_inline_tests
+                .iter()
+                .any(|entry| &entry.path == *hint)
+                && !refused_inline_tests
+                    .iter()
+                    .any(|entry| &entry.path == *hint)
+        })
+        .collect();
+    if !unspliced.is_empty() {
+        notes.push(format!(
+            "possible inline Rust tests changed inside production files: {}; no inline test module could be transplanted, so they were not part of the proof",
+            unspliced
+                .iter()
+                .map(|path| path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
     let after = repo.workspace_fingerprint(&base)?;
     let evidence_fresh = before == after;
     if !evidence_fresh {
@@ -303,7 +358,117 @@ pub fn verify_repository(
         notes,
         test_selection,
         effective_test_command,
+        spliced_inline_tests,
+        refused_inline_tests,
     })
+}
+
+/// Everything the base experiment produced that the receipt needs.
+///
+/// A named struct rather than a tuple because the result now carries the run,
+/// the tests that could not be transplanted, and the inline modules that were
+/// spliced or refused — a tuple of four unrelated types at the call site is
+/// where transcription mistakes happen.
+struct BaseExperiment {
+    result: RunResult,
+    blocked_tests: Vec<String>,
+    spliced: Vec<SplicedInlineTests>,
+    refused: Vec<RefusedInlineTests>,
+}
+
+/// Splice inline `#[cfg(test)]` test modules from production files onto the
+/// base worktree. See ADR-0010.
+///
+/// Every precondition is checked before anything is written, and a file that
+/// fails one is recorded in `refused` rather than spliced partially. A partial
+/// splice would produce a worktree that exists in neither revision, and the
+/// resulting red or green would be attributed to a code state that never
+/// existed.
+#[allow(clippy::too_many_arguments)]
+fn splice_inline_tests_into(
+    repo: &GitRepo,
+    worktree: &std::path::Path,
+    base: &str,
+    changed_files: &[ChangedFile],
+    inline_test_hints: &[String],
+    blocked_tests: &mut Vec<String>,
+    spliced: &mut Vec<SplicedInlineTests>,
+    refused: &mut Vec<RefusedInlineTests>,
+) -> Result<()> {
+    for path in inline_test_hints {
+        let Some(file) = changed_files
+            .iter()
+            .find(|candidate| &candidate.path == path)
+        else {
+            continue;
+        };
+        // A deleted or renamed-away file has no head source to splice from.
+        if matches!(file.kind, ChangeKind::Deleted) || file.path_is_lossy {
+            continue;
+        }
+        // A rename whose source was production code is refused by ADR-0007
+        // already; splicing it would reintroduce that failure through a
+        // different door.
+        if file.previous_path.is_some() && !file.previous_is_test {
+            blocked_tests.push(file.path.clone());
+            continue;
+        }
+
+        // The head revision is the working tree, not the `HEAD` commit: the
+        // change being verified is usually uncommitted. Reading `HEAD` here
+        // would compare the base against itself and find nothing to splice.
+        let Some(head_source) = repo.worktree_source(&file.path)? else {
+            continue;
+        };
+        let Some(base_source) = repo.show_file_at(base, &file.path)? else {
+            // New in head: there is no base file to splice into, and the whole
+            // file is a new-file transplant handled elsewhere.
+            continue;
+        };
+
+        let outcome = crate::inline::splice_inline_tests(&base_source, &head_source);
+        let modules = match outcome {
+            crate::inline::SpliceOutcome::NoInlineTestChange => continue,
+            crate::inline::SpliceOutcome::Refused(reason) => {
+                refused.push(RefusedInlineTests {
+                    path: file.path.clone(),
+                    reason: reason.as_str().to_owned(),
+                    explanation: reason.explanation().to_owned(),
+                });
+                continue;
+            }
+            crate::inline::SpliceOutcome::Spliced(source) => source,
+        };
+
+        // Production changes elsewhere in the same file are *not* a reason to
+        // refuse, and refusing would defeat the feature: fixing a bug and
+        // tightening the inline test in one commit is the normal shape of the
+        // change. Splicing moves only the test module's bytes, so an outside
+        // change is simply left behind at the base revision, which is exactly
+        // what the experiment needs. Measured: base production plus a head test
+        // module yields a genuine test failure, while a test module that
+        // references a head-only production item yields a compile error, which
+        // ADR-0003 already classifies as `base_incompatible` rather than a
+        // proof.
+        //
+        // The one thing that must not happen is a *partial* module splice, and
+        // `splice_inline_tests` refuses that by construction: it replaces whole
+        // module spans or returns a refusal.
+
+        repo.write_into_worktree(worktree, &file.path, &modules)?;
+        spliced.push(SplicedInlineTests {
+            path: file.path.clone(),
+            modules: crate::inline::test_module_identities(&head_source),
+        });
+    }
+
+    if !spliced.is_empty() {
+        spliced.sort_by(|a, b| a.path.cmp(&b.path));
+    }
+    if !refused.is_empty() {
+        refused.sort_by(|a, b| a.path.cmp(&b.path));
+    }
+    Ok(())
 }
 
 /// Collect test-integrity findings for every changed dedicated test.

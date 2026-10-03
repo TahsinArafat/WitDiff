@@ -185,6 +185,43 @@ pub struct Receipt {
     /// The exact command used for the proof runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_test_command: Option<Vec<String>>,
+    /// Inline `#[cfg(test)]` test modules transplanted by span splicing.
+    ///
+    /// Additive in v1: a receipt written before this field existed deserializes
+    /// as empty, which is correct because nothing was spliced then. See
+    /// ADR-0010.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spliced_inline_tests: Vec<SplicedInlineTests>,
+    /// Production files that changed inline tests but were *not* spliced, with
+    /// the reason. Reported so a reader can tell "WitDiff declined" from
+    /// "WitDiff did not try".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_inline_tests: Vec<RefusedInlineTests>,
+}
+
+/// A file whose inline test module was transplanted onto the base revision.
+///
+/// The file exists in neither revision: its production code is the base
+/// revision's and its test module is the head revision's. Recording that is the
+/// difference between a reviewer understanding the experiment and being misled
+/// by it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SplicedInlineTests {
+    /// Repository-relative path.
+    pub path: String,
+    /// The `#[cfg(test)]` modules transplanted, as module paths.
+    pub modules: Vec<String>,
+}
+
+/// A file that carries inline test changes that could not be transplanted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RefusedInlineTests {
+    /// Repository-relative path.
+    pub path: String,
+    /// Stable token naming the failed precondition, from ADR-0010.
+    pub reason: String,
+    /// Operator-facing explanation of the precondition that failed.
+    pub explanation: String,
 }
 
 /// How much of the suite the proof runs actually exercised.

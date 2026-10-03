@@ -72,16 +72,15 @@ cargo run -p witdiff -- verify --base HEAD~1
 
 Read `docs/roadmap.md`. High-value tasks currently are:
 
-1. safe inline `#[cfg(test)] mod tests` transplantation (needs an ADR first);
-2. resolving `let` bindings so a rebound subject is not reported as a removal;
-3. removed-error-check detection in the structural analyzer;
-4. mutation testing for changed Rust functions;
-5. adapters for pytest/Vitest/Jest/Go test;
-6. MCP wrapper only after the CLI/receipt contract is stable.
+1. resolving `let` bindings so a rebound subject is not reported as a removal;
+2. removed-error-check detection in the structural analyzer;
+3. mutation testing for changed Rust functions;
+4. adapters for pytest/Vitest/Jest/Go test;
+5. MCP wrapper only after the CLI/receipt contract is stable.
 
-Integration tests (item 1 of earlier lists), syntax-aware integrity analysis
-including `match`-arm comparison, and targeted test selection are done; see
-`docs/roadmap.md` for what shipped in 1.0.
+Integration tests, syntax-aware integrity analysis including `match`-arm
+comparison, targeted test selection, and inline `#[cfg(test)]` transplantation
+(ADR-0010) are done; see `docs/roadmap.md` for what shipped in 1.0.
 
 ## What not to build yet
 

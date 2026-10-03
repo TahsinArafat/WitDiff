@@ -86,21 +86,17 @@ Use a Rust parser to identify changed functions/tests inside `#[cfg(test)]` modu
 
 ### PG-102: inline test transplantation
 
-Status: designed, not implemented. ADR-0010 settles the mechanism as span
-splicing (`syn` locates the `#[cfg(test)]` module spans in head, those spans
-replace the corresponding base spans), with an explicit fallback to today's
-note-plus-`no_changed_tests` whenever a precondition fails.
+Status: done. ADR-0010 implements span splicing: `syn` locates the
+`#[cfg(test)]` module spans in the head revision and those spans replace the
+corresponding base spans, so only the test module's bytes move. Any precondition
+failure falls back to a reported refusal rather than a partial splice.
 
-The ADR rejects patch-hunk reconstruction on measured grounds: `git` forms hunks
-by proximity, so an adjacent production and test edit share one hunk and cannot
-be separated.
+`git` hunk filtering was rejected on measured grounds: hunks are formed by
+proximity, so an adjacent production and test edit share one hunk and cannot be
+separated.
 
-Remaining work: implement splicing, add the receipt field recording that a file
-was spliced rather than copied, and add end-to-end tests for the preconditions
-(base unparsable, test module new in head, changed test outside any module,
-production change outside every module) plus the success path.
-
-Safely apply only test-module changes to base while excluding production changes from the same file.
+The receipt records `spliced_inline_tests` and `refused_inline_tests`, so a
+reader can tell what was transplanted and why anything was not.
 
 ### PG-103: targeted cargo test adapter
 

@@ -98,6 +98,33 @@ pass.
 A test file that cannot be parsed yields `test_source_unparsable` and falls back
 to the line-oriented rules. It is never reported as clean.
 
+## Inline `#[cfg(test)]` transplantation
+
+Tests inside a `#[cfg(test)] mod tests` block share a file with the code they
+exercise, so transplanting them means transplanting part of a file. WitDiff does
+this by span splicing (ADR-0010): `syn` locates the module spans in the head
+revision and those spans replace the corresponding base spans. Only the test
+module's bytes move, so production changes elsewhere in the file stay at the
+base revision — which is what makes the experiment meaningful.
+
+A file is refused, rather than partially spliced, when any precondition fails:
+
+- `unparsable` — the base or head revision is not valid Rust;
+- `no_test_module_in_head` — there is no inline test module to transplant;
+- `no_counterpart_in_base` — the module is new in this revision, so there is no
+  base span to replace;
+- `test_outside_test_module` — a changed `#[test]` lies outside every module.
+
+A partial splice would produce a worktree that exists in neither revision, and
+the resulting red or green would be attributed to a code state that never
+existed. A transplanted test that references production code introduced in head
+fails to compile at base, which is classified `base_incompatible` and never
+`verified`.
+
+Production changes elsewhere in the same file do **not** block the splice. A
+commit that fixes a bug and tightens its inline test is the normal shape of a
+change, and the production change is simply not transplanted.
+
 ## Targeted test selection
 
 Opt-in through `verification.targeted_test_selection`, default `false`. When

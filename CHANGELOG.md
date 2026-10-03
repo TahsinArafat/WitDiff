@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Inline `#[cfg(test)]` transplantation** (ADR-0010). A changed inline test
+  module is now transplanted onto the base revision instead of being reported
+  as an unsupported case. `syn` locates the module spans in head and those spans
+  replace the corresponding base spans, so only the test module's bytes move and
+  the author's formatting is preserved. Every precondition failure — an
+  unparsable revision, a module new in head, a changed `#[test]` outside any
+  module — produces a reported refusal rather than a partial splice. The receipt
+  records `spliced_inline_tests` and `refused_inline_tests`.
 - **Removed `match`-arm detection** (ADR-0006). Arms are compared as a
   multiset of `(pattern, guard)` pairs grouped by normalized scrutinee, so
   reordering, moving an arm between `match` expressions on the same
@@ -15,6 +23,13 @@
 
 ### Fixed
 
+- **Inline test detection missed the common cases.** The detector looked for
+  marker substrings (`#[test]`, `assert!(`, …) on changed lines, so a changed
+  assertion body such as `is_even(3)` becoming `is_even(4)` was not recognized
+  as an inline test change at all, and a file whose production code changed
+  while merely *containing* a test module produced no candidate. Detection is
+  now structural: a file is a candidate when it parses, contains a
+  `#[cfg(test)]` module, and changed.
 - **A newly added assertion could be reported as a changed expected
   value.** Weakening comparisons paired each head assertion with the first
   same-subject base assertion, without first consuming base assertions that

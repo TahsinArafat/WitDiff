@@ -996,3 +996,187 @@ fn changed_expected_value_is_reported_against_a_real_repository() {
         changed.message
     );
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0010: inline `#[cfg(test)]` transplantation
+// ---------------------------------------------------------------------------
+
+/// A crate whose only test lives inside a `#[cfg(test)]` module in the same
+/// file as the code it exercises — the layout this feature exists to support.
+///
+/// `test_assertion` is what the test asserts, so a scenario can change the test
+/// independently of the implementation. That distinction matters: the invariant
+/// is about a *newly changed* test, so a scenario that changes only the
+/// implementation has no inline test change to transplant.
+fn inline_lib(implementation: &str, test_assertion: &str) -> String {
+    format!(
+        "\
+pub fn is_even(value: i32) -> bool {{
+    {implementation}
+}}
+
+#[cfg(test)]
+mod tests {{
+    use super::*;
+
+    #[test]
+    fn even_numbers_are_reported_even() {{
+        {test_assertion}
+    }}
+}}
+"
+    )
+}
+
+/// The core ADR-0010 guarantee: a changed inline test is transplanted onto the
+/// base revision, and the production fix in the same file is *not*.
+///
+/// If the production fix rode along, the transplanted test would pass on the
+/// base and the proof would be worthless.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn inline_test_is_transplanted_without_the_production_fix() {
+    // Base: the buggy implementation, with the test asserting the *stronger*
+    // claim that the fix will satisfy but the bug does not.
+    let fixture = Fixture::new(&[(
+        "src/lib.rs",
+        &inline_lib("value % 2 != 0", "assert!(!is_even(2));"),
+    )]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // Head: fix the implementation and tighten the test in the same commit.
+    // The test change is what must reach the base worktree.
+    fixture.write(
+        "src/lib.rs",
+        &inline_lib("value % 2 == 0", "assert!(is_even(2));"),
+    );
+
+    let receipt = fixture.verify(&fixture_config());
+
+    let spliced = receipt
+        .spliced_inline_tests
+        .iter()
+        .find(|entry| entry.path == "src/lib.rs")
+        .unwrap_or_else(|| {
+            panic!(
+                "src/lib.rs should be recorded as spliced, got spliced={:?} refused={:?} notes={:?}",
+                receipt.spliced_inline_tests, receipt.refused_inline_tests, receipt.notes
+            )
+        });
+    assert!(
+        spliced.modules.iter().any(|module| module == "tests"),
+        "the transplanted module must be named, got {:?}",
+        spliced.modules
+    );
+    assert!(
+        receipt.refused_inline_tests.is_empty(),
+        "nothing should have been refused, got {:?}",
+        receipt.refused_inline_tests
+    );
+    assert!(
+        receipt.red_green_proven,
+        "the transplanted inline test must fail on base and pass on head; status={:?} notes={:?}",
+        receipt.status, receipt.notes
+    );
+    assert_eq!(receipt.status, VerificationStatus::Verified);
+}
+
+/// Production changes elsewhere in the same file do not block the splice.
+///
+/// Fixing a bug and tightening the inline test in one commit is the normal
+/// shape of a change. Only the test module's bytes are moved, so the production
+/// change stays at base — which is what makes the experiment meaningful.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn inline_test_is_spliced_alongside_a_production_edit() {
+    let base = inline_lib("value % 2 != 0", "assert!(!is_even(2));");
+    let mut head = inline_lib("value % 2 == 0", "assert!(is_even(2));");
+    // An unrelated production addition elsewhere in the same file.
+    head.push_str("\npub fn unrelated_helper() -> i32 {\n    41 + 1\n}\n");
+    let fixture = Fixture::new(&[("src/lib.rs", &base)]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", &head);
+
+    let receipt = fixture.verify(&fixture_config());
+
+    assert!(
+        receipt
+            .spliced_inline_tests
+            .iter()
+            .any(|entry| entry.path == "src/lib.rs"),
+        "a production edit elsewhere must not block the splice, got spliced={:?} refused={:?} status={:?}",
+        receipt.spliced_inline_tests,
+        receipt.refused_inline_tests,
+        receipt.status
+    );
+    assert!(
+        receipt.red_green_proven,
+        "the transplanted test must still fail on base; status={:?} notes={:?}",
+        receipt.status, receipt.notes
+    );
+}
+
+/// A transplanted test that references a production item existing only in head
+/// cannot compile at base. ADR-0003 already classifies that as
+/// `base_incompatible`, and it must never be reported as a proof.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn inline_test_referencing_head_only_code_is_base_incompatible() {
+    let base = "pub fn is_even(value: i32) -> bool {\n    value % 2 != 0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn t() { assert!(!is_even(2)); }\n}\n";
+    // Head adds a production helper and a test that calls it.
+    let head = "pub fn is_even(value: i32) -> bool {\n    value % 2 == 0\n}\n\nfn helper() -> bool {\n    true\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn t() { assert!(helper()); }\n}\n";
+    let fixture = Fixture::new(&[("src/lib.rs", base)]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", head);
+
+    let receipt = fixture.verify(&fixture_config());
+
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::BaseIncompatible,
+        "a splice that cannot compile at base is incompatible, not verified; notes={:?}",
+        receipt.notes
+    );
+    assert!(
+        !receipt.red_green_proven,
+        "a compile error is not a red result"
+    );
+}
+
+/// A test module that is new in head has no base counterpart to replace, so it
+/// is refused instead of being invented at base.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn inline_test_module_new_in_head_is_refused() {
+    let base = "pub fn is_even(value: i32) -> bool {\n    value % 2 != 0\n}\n";
+    let fixture = Fixture::new(&[("src/lib.rs", base)]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // Head must pass, or the run stops at `head_failed` before any transplant
+    // is attempted. The test therefore asserts the behavior the *fixed*
+    // implementation actually has.
+    fixture.write(
+        "src/lib.rs",
+        &inline_lib("value % 2 == 0", "assert!(is_even(2));"),
+    );
+
+    let receipt = fixture.verify(&fixture_config());
+
+    let refused = receipt
+        .refused_inline_tests
+        .iter()
+        .find(|entry| entry.path == "src/lib.rs")
+        .unwrap_or_else(|| {
+            panic!(
+                "a test module new in head must be refused, got status={:?} refused={:?} notes={:?}",
+                receipt.status, receipt.refused_inline_tests, receipt.notes
+            )
+        });
+    assert_eq!(refused.reason, "no_counterpart_in_base");
+    assert!(receipt.spliced_inline_tests.is_empty());
+    assert_ne!(receipt.status, VerificationStatus::Verified);
+}
