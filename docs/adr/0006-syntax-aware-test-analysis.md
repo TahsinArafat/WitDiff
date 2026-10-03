@@ -24,7 +24,23 @@ contains, with each assertion reduced to its macro name and whitespace-
 normalized argument text.
 
 This yields rules that are statements about code rather than about diffs:
-removed assertions, changed expected values, weakened assertions, deleted tests.
+removed assertions, changed expected values, weakened assertions, deleted
+tests, and removed `match` arms.
+
+`match` arms are compared as a multiset of `(pattern, guard)` pairs,
+grouped by normalized scrutinee rather than paired expression by
+expression. Grouping is what makes the comparison robust to a `match`
+being split, merged, or reordered, while still catching any arm that no
+longer exists anywhere on the same scrutinee. Collapsing specific arms
+into a wildcard is reported, because the specific arms are then absent.
+A guard is part of an arm's identity: dropping one makes the arm apply
+to more inputs, so the guarded form counts as removed.
+
+A `match` that disappeared entirely is deliberately not reported. A
+`match` rewritten as an `if`/`else` chain is a common refactor, and any
+assertion inside the removed arms is already caught by the assertion
+rules; reporting the structural removal too would turn a faithful
+refactor into a false positive.
 
 ## Consequences
 
@@ -40,6 +56,12 @@ removed assertions, changed expected values, weakened assertions, deleted tests.
 - A file that cannot be parsed yields an explicit `test_source_unparsable`
   finding and falls back to the line-oriented rules. It is never reported as
   clean.
+- Weakening comparisons consume identical assertions before pairing by
+  subject. Without that ordering, a newly added assertion whose subject
+  collides with an existing one — a second `match` arm asserting a
+  different expected value over the same expression — would be reported as
+  if the existing assertion had been rewritten. The ordering was found by
+  writing the added-arm test, not by inspection.
 
 ## Alternatives considered
 

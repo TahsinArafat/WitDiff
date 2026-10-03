@@ -32,10 +32,11 @@
 
 use std::collections::BTreeMap;
 
+use quote::ToTokens;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, File, ItemFn, Macro, Meta,
+    Attribute, ExprMatch, File, ItemFn, Macro, Meta, Pat,
 };
 
 use crate::model::{IntegrityFinding, Severity};
@@ -49,6 +50,34 @@ struct Assertion {
     arguments: String,
     /// 1-based line within its own revision.
     line: usize,
+}
+
+/// One arm of a `match` expression, identified by what it matches
+/// rather than by what it does.
+///
+/// The body is deliberately not part of the identity. Assertions
+/// inside a body are already tracked as assertions, and a body that
+/// changes without changing any assertion is not, by itself, evidence
+/// of weakening. A guard *is* part of the identity: dropping a guard
+/// makes the arm apply to more cases, so the old guarded arm counts
+/// as removed and the unguarded one as added.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchArm {
+    /// Whitespace-normalized pattern text.
+    pattern: String,
+    /// Whitespace-normalized guard expression, when the arm has one.
+    guard: Option<String>,
+    /// 1-based line within its own revision.
+    line: usize,
+}
+
+/// A `match` expression observed in a parsed revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchExpr {
+    /// Whitespace-normalized scrutinee text, used to pair the same
+    /// `match` across revisions.
+    scrutinee: String,
+    arms: Vec<MatchArm>,
 }
 
 /// The strength class of an assertion, used to detect weakening.
@@ -70,6 +99,9 @@ struct TestFn {
     ignored: bool,
     should_panic: bool,
     assertions: Vec<Assertion>,
+    /// `match` expressions, keyed by nothing: pairing across
+    /// revisions happens on the normalized scrutinee.
+    matches: Vec<MatchExpr>,
     /// True when the body contains no assertion at all.
     body_is_empty: bool,
 }
@@ -265,6 +297,7 @@ pub fn analyze_rust_test_change(
         }
 
         findings.extend(weakening_findings(path, name, base_test, head_test));
+        findings.extend(match_arm_findings(path, name, base_test, head_test));
     }
 
     for name in base.tests.keys() {
@@ -289,6 +322,93 @@ pub fn analyze_rust_test_change(
     findings
 }
 
+/// Arms removed from a `match` that the change also edited.
+///
+/// A `match` is paired across revisions by its normalized scrutinee, and
+/// its arms are compared as a multiset on `(pattern, guard)` — the same
+/// matching [`missing_assertions`] uses. Consequences, all deliberate:
+///
+/// - An arm that merely moved within the function, or was reordered, is
+///   not reported.
+/// - An arm that survived in *any* `match` on the same scrutinee is not
+///   reported, so splitting one `match` into two is not a weakening.
+/// - Collapsing specific arms into a wildcard is reported, because the
+///   specific arms are then absent.
+/// - Dropping a guard changes the arm's identity, so the old guarded arm
+///   is reported as removed; the unguarded survivor is an addition, and
+///   additions are not findings.
+///
+/// A `match` that disappeared entirely is *not* reported here. Replacing
+/// a `match` with an `if`/`else` chain or a `let`-`else` is a common
+/// refactor, and any assertion inside the removed arms is already caught
+/// by [`missing_assertions`]. Reporting the structural removal too would
+/// turn a faithful refactor into a false positive.
+fn match_arm_findings(
+    path: &str,
+    test_name: &str,
+    base: &TestFn,
+    head: &TestFn,
+) -> Vec<IntegrityFinding> {
+    let mut findings = Vec::new();
+
+    let base_arms = arms_by_scrutinee(base);
+    let head_arms = arms_by_scrutinee(head);
+
+    for (scrutinee, base_match_arms) in &base_arms {
+        let Some(head_match_arms) = head_arms.get(scrutinee) else {
+            // The whole `match` is gone; see the module rationale above.
+            continue;
+        };
+
+        let mut unmatched: Vec<&MatchArm> = head_match_arms.clone();
+        for arm in base_match_arms {
+            let survives = unmatched
+                .iter()
+                .position(|candidate| {
+                    candidate.pattern == arm.pattern && candidate.guard == arm.guard
+                })
+                .map(|index| unmatched.remove(index))
+                .is_some();
+            if survives {
+                continue;
+            }
+            let identity = match &arm.guard {
+                Some(guard) => format!("{} if {}", arm.pattern, guard),
+                None => arm.pattern.clone(),
+            };
+            findings.push(finding(
+                Severity::High,
+                path,
+                arm.line,
+                "removed_match_arm",
+                format!(
+                    "test `{test_name}` removed the `match` arm `{identity}` on `{scrutinee}` (base line {}); the cases it covered are no longer checked",
+                    arm.line
+                ),
+            ));
+        }
+    }
+
+    findings
+}
+
+/// All arms of all `match` expressions in a test, grouped by scrutinee.
+///
+/// Grouping — rather than pairing expression by expression — is what
+/// makes the comparison robust to a `match` being split, merged or
+/// reordered, while still catching any arm that no longer exists
+/// anywhere on the same scrutinee.
+fn arms_by_scrutinee(test: &TestFn) -> BTreeMap<String, Vec<&MatchArm>> {
+    let mut grouped: BTreeMap<String, Vec<&MatchArm>> = BTreeMap::new();
+    for expression in &test.matches {
+        grouped
+            .entry(expression.scrutinee.clone())
+            .or_default()
+            .extend(expression.arms.iter());
+    }
+    grouped
+}
+
 /// Assertions present in the base revision of a test but absent from the head.
 ///
 /// Matching is on `(macro_name, normalized arguments)`, so an assertion that
@@ -311,8 +431,22 @@ fn missing_assertions(base: &TestFn, head: &TestFn) -> Vec<Assertion> {
     missing
 }
 
-/// Detect assertions that survived but were made weaker, or whose expected
-/// value was changed.
+/// Detect assertions that survived but were made weaker, or whose
+/// expected value was changed.
+///
+/// Pairing happens in two passes, and the order is the point:
+///
+/// 1. Every head assertion that is byte-identical to a base
+///    assertion consumes it. Those assertions are untouched, and
+///    must not remain available as the "before" side of a
+///    weakening claim.
+/// 2. Each remaining head assertion pairs with at most one
+///    remaining base assertion that shares its subject.
+///
+/// Without the first pass, a *newly added* assertion whose subject
+/// collides with an existing one — a second `match` arm asserting
+/// a different expected value over the same expression — would be
+/// reported as if the existing assertion had been rewritten.
 fn weakening_findings(
     path: &str,
     test_name: &str,
@@ -321,32 +455,34 @@ fn weakening_findings(
 ) -> Vec<IntegrityFinding> {
     let mut findings = Vec::new();
 
+    let mut remaining_base: Vec<&Assertion> = base.assertions.iter().collect();
+    let mut remaining_head: Vec<&Assertion> = Vec::new();
     for head_assertion in &head.assertions {
+        match remaining_base
+            .iter()
+            .position(|candidate| identical(candidate, head_assertion))
+        {
+            Some(index) => {
+                remaining_base.remove(index);
+            }
+            None => remaining_head.push(head_assertion),
+        }
+    }
+
+    for head_assertion in &remaining_head {
         // Pair an assertion with its true counterpart before considering a
         // looser match. Without this, a file containing both
         // `assert_eq!(receipt.status, NotVerified)` and
         // `assert!(receipt.status != Verified)` would pair the head `assert!`
-        // with the base `assert_eq!` — because the `assert_eq!` happens to come
-        // first and shares a subject — and report a weakening that never
-        // happened.
-        let base_assertion = base
-            .assertions
+        // with the base `assert_eq!` — because the `assert_eq!` happens to
+        // come first and shares a subject — and report a weakening that
+        // never happened.
+        let Some(base_assertion) = remaining_base
             .iter()
-            .find(|candidate| identical(candidate, head_assertion))
-            .or_else(|| {
-                base.assertions
-                    .iter()
-                    .find(|candidate| same_subject(candidate, head_assertion))
-            });
-
-        let Some(base_assertion) = base_assertion else {
+            .find(|candidate| same_subject(candidate, head_assertion))
+        else {
             continue;
         };
-
-        // An unchanged assertion is not a change, whatever its shape.
-        if identical(base_assertion, head_assertion) {
-            continue;
-        }
 
         let base_strength = strength_of(&base_assertion.macro_name, &base_assertion.arguments);
         let head_strength = strength_of(&head_assertion.macro_name, &head_assertion.arguments);
@@ -542,7 +678,7 @@ fn shape_of(parsed: &File) -> RevisionShape {
         fn visit_item_fn(&mut self, item: &'ast ItemFn) {
             if has_attribute(&item.attrs, "test") {
                 let name = item.sig.ident.to_string();
-                let mut body = AssertionCollector::default();
+                let mut body = TestBodyCollector::default();
                 body.visit_block(&item.block);
                 self.shape.tests.insert(
                     name.clone(),
@@ -552,6 +688,7 @@ fn shape_of(parsed: &File) -> RevisionShape {
                         ignored: has_attribute(&item.attrs, "ignore"),
                         should_panic: has_attribute(&item.attrs, "should_panic"),
                         assertions: body.assertions,
+                        matches: body.matches,
                         body_is_empty: is_empty_block(&item.block),
                     },
                 );
@@ -568,11 +705,12 @@ fn shape_of(parsed: &File) -> RevisionShape {
 }
 
 #[derive(Default)]
-struct AssertionCollector {
+struct TestBodyCollector {
     assertions: Vec<Assertion>,
+    matches: Vec<MatchExpr>,
 }
 
-impl<'ast> Visit<'ast> for AssertionCollector {
+impl<'ast> Visit<'ast> for TestBodyCollector {
     fn visit_macro(&mut self, mac: &'ast Macro) {
         if is_assertion_macro(&mac.path) {
             let arguments = normalize_tokens(&mac.tokens.to_string());
@@ -589,6 +727,48 @@ impl<'ast> Visit<'ast> for AssertionCollector {
         }
         visit::visit_macro(self, mac);
     }
+
+    fn visit_expr_match(&mut self, expression: &'ast ExprMatch) {
+        let scrutinee = normalize_tokens(&render(&expression.expr));
+        let arms = expression
+            .arms
+            .iter()
+            .map(|arm| {
+                let (pattern, guard) = split_arm(&arm.pat);
+                MatchArm {
+                    pattern,
+                    guard,
+                    line: arm.pat.span().start().line,
+                }
+            })
+            .collect();
+        self.matches.push(MatchExpr { scrutinee, arms });
+        visit::visit_expr_match(self, expression);
+    }
+}
+
+/// Split a match arm's pattern into its pattern and its guard.
+///
+/// `syn` 3 represents `pat if guard` as `Pat::Guard`, so the guard is
+/// part of the pattern node rather than a separate field of the arm.
+fn split_arm(pat: &Pat) -> (String, Option<String>) {
+    match pat {
+        Pat::Guard(guarded) => (
+            normalize_tokens(&render(&guarded.pat)),
+            Some(normalize_tokens(&render(&guarded.guard))),
+        ),
+        other => (normalize_tokens(&render(other)), None),
+    }
+}
+
+/// Render a syntax node to normalized text.
+///
+/// `syn` implements `quote::ToTokens` for every node type, so this
+/// covers scrutinees, patterns and guard expressions alike without
+/// reaching for `Debug` formatting, whose shape is not guaranteed
+/// stable across versions.
+fn render<T: ToTokens>(node: &T) -> String {
+    node.to_token_stream().to_string()
 }
 
 fn is_assertion_macro(path: &syn::Path) -> bool {
@@ -1000,5 +1180,133 @@ mod tests {
         // Observed `proc_macro2` output for a multi-line call.
         assert_eq!(normalize_tokens("compute () , 4 ,"), "compute(), 4");
         assert_eq!(normalize_tokens("compute(), 4"), "compute(), 4");
+    }
+
+    /// The canonical weakening this rule exists to catch: a specific
+    /// case is deleted from a `match`, so inputs it covered are no
+    /// longer checked.
+    #[test]
+    fn removed_match_arm_is_reported() {
+        let base = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        2 => assert_eq!(cost(), 20),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            rules(&findings).contains(&"removed_match_arm"),
+            "a deleted arm must be reported, got {:?}",
+            rules(&findings)
+        );
+        assert!(
+            findings.iter().any(|f| f.severity == Severity::High),
+            "a removed arm is high severity, got {:?}",
+            findings
+                .iter()
+                .map(|f| f.severity.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Collapsing specific arms into a wildcard is the same weakening
+    /// with extra steps: every specific arm disappears.
+    #[test]
+    fn wildcard_collapse_is_reported() {
+        let base = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        2 => assert_eq!(cost(), 20),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    match value() {\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let findings = analyze(base, head);
+        let removed = findings
+            .iter()
+            .filter(|f| f.rule == "removed_match_arm")
+            .count();
+        assert_eq!(
+            removed,
+            2,
+            "both specific arms must be reported, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// Arms that merely moved or swapped order are unchanged.
+    #[test]
+    fn reordered_match_arms_are_not_reported() {
+        let base = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        2 => assert_eq!(cost(), 20),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    match value() {\n        2 => assert_eq!(cost(), 20),\n        _ => panic!(\"unexpected\"),\n        1 => assert_eq!(cost(), 10),\n    }\n}\n";
+        assert!(
+            analyze(base, head).is_empty(),
+            "reordering arms is not a change"
+        );
+    }
+
+    /// Adding a case is coverage growth, not a finding.
+    #[test]
+    fn added_match_arm_is_not_reported() {
+        let base = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        2 => assert_eq!(cost(), 20),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        assert!(analyze(base, head).is_empty());
+    }
+
+    /// An arm that survives in a *different* `match` on the same
+    /// scrutinee still covers its cases, so splitting one `match` into
+    /// two is not a weakening.
+    #[test]
+    fn arm_surviving_in_another_match_on_same_scrutinee_is_not_reported() {
+        let base = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        2 => assert_eq!(cost(), 20),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        _ => panic!(\"unexpected\"),\n    }\n    match value() {\n        2 => assert_eq!(cost(), 20),\n    }\n}\n";
+        assert!(
+            analyze(base, head).is_empty(),
+            "an arm that survived on the same scrutinee still covers its case"
+        );
+    }
+
+    /// Dropping a guard changes which inputs an arm covers: the guarded
+    /// base arm no longer exists, so it is reported as removed.
+    #[test]
+    fn dropped_arm_guard_is_reported_as_removed_arm() {
+        let base = "#[test]\nfn cases() {\n    match value() {\n        v if v > 0 => assert_eq!(cost(), 10),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    match value() {\n        v => assert_eq!(cost(), 10),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            rules(&findings).contains(&"removed_match_arm"),
+            "dropping a guard removes the guarded arm, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// A `match` replaced by an `if`/`else` chain is a faithful
+    /// refactor, not a weakening. Its assertions are still compared by
+    /// the assertion rules; the structural removal is deliberately not
+    /// reported.
+    #[test]
+    fn match_rewritten_as_if_else_is_not_reported() {
+        let base = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    if value() == 1 {\n        assert_eq!(cost(), 10);\n    } else {\n        panic!(\"unexpected\");\n    }\n}\n";
+        assert!(
+            analyze(base, head).is_empty(),
+            "a match refactored into if/else keeps its assertions"
+        );
+    }
+
+    /// The visitor must descend into nested expressions, or a `match`
+    /// hidden in a loop or closure would escape the comparison.
+    #[test]
+    fn match_inside_a_loop_is_compared() {
+        let base = "#[test]\nfn cases() {\n    for v in values() {\n        match v {\n            1 => assert_eq!(cost(), 10),\n            _ => panic!(\"unexpected\"),\n        }\n    }\n}\n";
+        let head = "#[test]\nfn cases() {\n    for v in values() {\n        match v {\n            _ => panic!(\"unexpected\"),\n        }\n    }\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            rules(&findings).contains(&"removed_match_arm"),
+            "an arm removed inside a loop must be reported, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// A `match` that only exists in the head revision cannot have lost
+    /// an arm, because there was nothing to lose.
+    #[test]
+    fn match_in_a_new_test_is_not_reported() {
+        let head = "#[test]\nfn cases() {\n    match value() {\n        1 => assert_eq!(cost(), 10),\n        _ => panic!(\"unexpected\"),\n    }\n}\n";
+        let findings = analyze_rust_test_change("tests/t.rs", None, head);
+        assert!(
+            !rules(&findings).contains(&"removed_match_arm"),
+            "a brand-new test cannot have removed an arm"
+        );
     }
 }

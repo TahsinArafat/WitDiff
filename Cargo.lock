@@ -825,6 +825,7 @@ dependencies = [
  "globset",
  "hex",
  "proc-macro2",
+ "quote",
  "serde",
  "serde_json",
  "sha2",

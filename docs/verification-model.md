@@ -55,6 +55,10 @@ Structural rules:
 - `changed_expected_value`: the same subject expression with a different
   expected value;
 - `weakened_assertion`: an exact assertion replaced by a weaker predicate;
+- `removed_match_arm`: a `match` arm present at base and absent at head
+  on the same scrutinee; a guard is part of the arm's identity, and
+  collapsing specific arms into a wildcard is reported because the
+  specific arms are then absent;
 - `removed_test`: a `#[test]` function that no longer exists;
 - `ignored_test`: a test carrying `#[ignore]`;
 - `trivial_assertion`: an assertion that cannot fail;
@@ -77,7 +81,12 @@ revisions; they do not decide whether a test is correct.
 ### Normalization and bindings
 
 Assertion text is normalized to be whitespace-insensitive, so reformatting or
-reordering a test produces no finding.
+reordering a test produces no finding. `match` arms are compared as a
+multiset of `(pattern, guard)` pairs grouped by scrutinee, so reordering
+arms or splitting one `match` into two on the same scrutinee also produces
+no finding. A `match` replaced by an `if`/`else` chain is not reported
+either: its assertions are still compared, and the structural removal is a
+common refactor.
 
 WitDiff does not resolve `let` bindings. An assertion rewritten from
 `assert_eq!(compute(), 4)` to `assert_eq!(v, 4)` is therefore reported as

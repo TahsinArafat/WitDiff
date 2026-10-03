@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Removed `match`-arm detection** (ADR-0006). Arms are compared as a
+  multiset of `(pattern, guard)` pairs grouped by normalized scrutinee, so
+  reordering, moving an arm between `match` expressions on the same
+  scrutinee, and splitting one `match` into two produce no finding, while
+  a deleted arm — including a specific arm collapsed into a wildcard, and
+  a guarded arm whose guard was dropped — is reported as `removed_match_arm`
+  (high severity). A `match` replaced by an `if`/`else` chain is a
+  documented non-finding: its assertions are still compared.
+
+### Fixed
+
+- **A newly added assertion could be reported as a changed expected
+  value.** Weakening comparisons paired each head assertion with the first
+  same-subject base assertion, without first consuming base assertions that
+  an identical head assertion had already matched. A second `match` arm
+  asserting `assert_eq!(cost(), 20)` next to a surviving
+  `assert_eq!(cost(), 10)` was therefore reported as if the `10` had been
+  rewritten to `20`. Pairing now consumes identical assertions first, then
+  pairs the remainder by subject.
+
 ## 1.0.0
 
 First stable release. The red/green proof semantics are unchanged from 0.1; this

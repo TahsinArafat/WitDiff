@@ -115,8 +115,7 @@ Status: mostly done in 1.0. Shipped as `witdiff_core::rustanalysis`, producing
 Still open from the original list:
 
 - removed error checks (a distinct rule from removed assertions);
-- mock substitution around changed behavior;
-- removed match arms (see `docs/roadmap.md`, M2).
+- mock substitution around changed behavior.
 
 The analyzer does not resolve `let` bindings, so an assertion rewritten as
 `assert_eq!(compute(), 4)` -> `assert_eq!(v, 4)` is reported as a removal. That
