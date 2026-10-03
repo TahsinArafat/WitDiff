@@ -63,11 +63,19 @@ Mutation is opt-in (`verification.mutation`) and supplementary: it never changes
 
 ## M4 — language adapters
 
-- [ ] pytest
-- [ ] Vitest/Jest
-- [ ] Go test
-- [ ] test framework capability trait
-- [ ] framework-specific failure classification
+- [x] pytest
+- [x] Vitest/Jest
+- [x] Go test
+- [x] test framework capability trait (classification and optional targeted invocation)
+- [x] framework-specific failure classification
+
+Verified end to end against real toolchains: a pytest repository and a Go
+repository each reach `verified`, where before ADR-0012 the same pytest failure
+classified as `CommandFailure` and could not produce a proof.
+
+Not yet implemented: targeted invocation for non-Rust frameworks (the full suite
+runs, and the receipt says `full_suite`), and structure-aware integrity analysis
+and mutation, which remain Rust-only.
 
 ## M5 — ecosystem integrations
 

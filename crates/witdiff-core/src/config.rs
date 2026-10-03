@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
+use crate::framework::TestFramework;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -55,6 +57,18 @@ pub struct VerificationConfig {
     /// Maximum mutants attempted per changed function.
     #[serde(default = "default_max_mutants_per_function")]
     pub max_mutants_per_function: usize,
+    /// Which test framework's output the run should be classified against.
+    ///
+    /// Named explicitly rather than sniffed from output, because inferring it
+    /// from text the candidate controls could turn a broken invocation into a
+    /// test failure (ADR-0012). Defaults to `cargo`; an unrecognized value is
+    /// an error rather than a silent fallback to the Rust classifier.
+    #[serde(default = "default_framework")]
+    pub framework: String,
+}
+
+fn default_framework() -> String {
+    TestFramework::Cargo.as_str().to_owned()
 }
 
 fn default_max_mutants() -> usize {
@@ -63,6 +77,27 @@ fn default_max_mutants() -> usize {
 
 fn default_max_mutants_per_function() -> usize {
     5
+}
+
+impl VerificationConfig {
+    /// Resolve the configured framework name.
+    ///
+    /// An unrecognized name is an error: silently classifying with the Rust
+    /// matcher would produce exactly the wrong-conservative answer ADR-0012
+    /// exists to fix, and the operator would have no way to notice.
+    pub fn framework(&self) -> anyhow::Result<TestFramework> {
+        TestFramework::parse(&self.framework).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown test framework `{}`; supported values are {}",
+                self.framework,
+                TestFramework::all()
+                    .iter()
+                    .map(|framework| framework.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+    }
 }
 
 impl Default for ProjectConfig {
@@ -104,6 +139,7 @@ impl Default for VerificationConfig {
             mutation: false,
             max_mutants: default_max_mutants(),
             max_mutants_per_function: default_max_mutants_per_function(),
+            framework: default_framework(),
         }
     }
 }

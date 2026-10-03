@@ -67,6 +67,8 @@ Rust inline `#[cfg(test)] mod tests` blocks are transplanted by span splicing: o
 
 Targeted test selection is cargo-only and opt-in (`verification.targeted_test_selection`, default `false`). When the configured command cannot be narrowed without changing what runs, WitDiff runs the full suite and records why. See [`docs/verification-model.md`](docs/verification-model.md).
 
+Failure classification is framework-specific: cargo, pytest, Jest/Vitest and Go are recognized, selected with `verification.framework` (default `cargo`). Before this, a genuine pytest, Jest or Go test failure classified as an unrecognized command failure, which yields `not_verified` instead of a proof. See ADR-0012.
+
 Changed-code mutation is opt-in (`verification.mutation`, default `false`) and **supplementary**: it never changes `status`. Each mutant is classified `killed`, `survived`, `not_compiled`, `timeout` or `skipped`, and only the first two are decisions about test strength — a mutant that failed to build was never executed and is not counted as a kill. See ADR-0011.
 
 ## Build
@@ -166,7 +168,7 @@ The next milestones are intentionally ordered so agents can work independently:
 
 - the remaining mutation operators (condition negation, numeric return substitution);
 - resolving `let` bindings so a rebound subject is not reported as a removal;
-- Python/pytest, JS/Vitest/Jest, and Go adapters;
+- targeted invocation and structural integrity analysis for the non-Rust adapters;
 - receipt signing/attestation;
 - GitHub Actions integration and PR annotations;
 - MCP server as a thin wrapper over the deterministic engine.

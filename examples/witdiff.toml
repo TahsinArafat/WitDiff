@@ -3,6 +3,13 @@ language = "rust"
 
 [verification]
 base = "origin/main"
+
+# Which framework's output the run is classified against. One of: cargo,
+# pytest, javascript (Jest/Vitest), go. Named explicitly rather than sniffed
+# from output, because inferring it from text the candidate controls could turn
+# a broken invocation into a red/green proof. An unrecognized value is an error
+# rather than a silent fallback to the Rust classifier.
+framework = "cargo"
 test_command = ["cargo", "test", "--workspace", "--all-targets", "--all-features"]
 test_globs = [
   "tests/*.rs",

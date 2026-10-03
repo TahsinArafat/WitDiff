@@ -106,11 +106,13 @@ pub fn verify_repository(
     let integrity_findings = collect_integrity(repo, &base, &inspect)?;
 
     let timeout = config.verification.timeout_secs.map(Duration::from_secs);
+    let framework = config.verification.framework()?;
     let head_run = run(
         &command,
         repo.root(),
         config.verification.max_output_bytes,
         timeout,
+        framework,
     )?;
 
     let mut splice_notes: Vec<String> = Vec::new();
@@ -148,6 +150,7 @@ pub fn verify_repository(
             &worktree,
             config.verification.max_output_bytes,
             timeout,
+            framework,
         );
         let experiment_result = match control_result {
             Ok(control) if control.success => {
@@ -209,6 +212,7 @@ pub fn verify_repository(
                             &worktree,
                             config.verification.max_output_bytes,
                             timeout,
+                            framework,
                         )?,
                         blocked_tests,
                         spliced,
@@ -352,6 +356,7 @@ pub fn verify_repository(
             &base,
             &production_paths,
             timeout,
+            framework,
         ) {
             Ok(report) => report,
             Err(error) => {

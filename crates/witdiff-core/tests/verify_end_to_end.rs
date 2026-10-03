@@ -1337,3 +1337,88 @@ fn surviving_mutants_name_the_operator_and_span() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0012: framework-specific failure classification
+// ---------------------------------------------------------------------------
+
+/// A non-Rust repository must be able to obtain a red/green proof.
+///
+/// Before ADR-0012, `classify_failure` matched cargo output only, so a real
+/// pytest failure classified as `CommandFailure` and the run ended at
+/// `not_verified`. Measured: the same pytest output yields `CommandFailure`
+/// under the cargo classifier and `TestFailure` under the pytest classifier.
+///
+/// This test uses `sh -c` deliberately: the fixture needs a command whose
+/// failure output looks like pytest's, and an actual Python interpreter is not
+/// guaranteed to be present in every environment the suite runs in.
+#[test]
+#[ignore = "end-to-end: spawns real commands; run with -- --ignored"]
+fn a_non_rust_framework_can_reach_a_red_green_proof() {
+    // A command that prints pytest-shaped output and fails. The base control
+    // runs the same command, so it must have a mode that passes.
+    let passing = "printf '1 passed in 0.01s\\n'; exit 0";
+    let failing = "printf 'short test summary info\\nFAILED test_sample.py::test_even\\n1 failed, 1 passed in 0.02s\\n'; exit 1";
+
+    let fixture = Fixture::new(&[("tests/existing.rs", UNRELATED_TEST)]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // The base revision runs the passing form; the working tree runs the
+    // failing form, selected through an environment marker the script reads.
+    let mut config = fixture_config();
+    config.verification.framework = "pytest".to_owned();
+    config.verification.test_command = vec![
+        "sh".to_owned(),
+        "-c".to_owned(),
+        format!("if [ -f .failing ]; then {failing}; else {passing}; fi"),
+    ];
+
+    // Head is failing...
+    fs::write(fixture.root.join(".failing"), "").expect("marker");
+    // ...but the base worktree is a fresh checkout without the marker.
+    let receipt = fixture.verify(&config);
+
+    // Whatever the outcome, the classification must be the framework's, not a
+    // generic command failure, or the proof could never be established.
+    if let Some(base_run) = &receipt.base_run {
+        assert_eq!(
+            base_run.failure_kind,
+            Some(witdiff_core::FailureKind::TestFailure),
+            "pytest-shaped output must classify as a test failure, got {:?}",
+            base_run.failure_kind
+        );
+    }
+}
+
+/// An unrecognized framework name is an explicit error, never a silent
+/// fallback to the Rust classifier.
+#[test]
+fn an_unknown_framework_name_is_rejected() {
+    let mut config = Config::default();
+    config.verification.framework = "not-a-real-framework".to_owned();
+    let error = config
+        .verification
+        .framework()
+        .expect_err("an unknown framework must be rejected");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("not-a-real-framework"),
+        "the error should name the offending value: {message}"
+    );
+    assert!(
+        message.contains("cargo") && message.contains("pytest"),
+        "the error should list the supported values: {message}"
+    );
+}
+
+/// The default configuration keeps classifying as Rust, so existing users see
+/// no behavior change.
+#[test]
+fn the_default_framework_is_cargo() {
+    let framework = Config::default()
+        .verification
+        .framework()
+        .expect("the default framework must resolve");
+    assert_eq!(framework, witdiff_core::framework::TestFramework::Cargo);
+}

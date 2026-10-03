@@ -14,3 +14,4 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0010: inline `#[cfg(test)]` tests are transplanted by span splicing, or not
   at all
 - ADR-0011: mutation is a supplementary signal, never a proof
+- ADR-0012: failure classification is framework-specific and explicitly selected

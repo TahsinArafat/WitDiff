@@ -23,6 +23,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     config::Config,
+    framework::TestFramework,
     git::{GitRepo, WorktreeGuard},
     model::{FailureKind, MutantOutcome, MutantResult, MutationReport},
     mutation::{mutants_for_file, test_regions, Mutant},
@@ -40,6 +41,7 @@ pub fn analyze_mutations(
     base: &str,
     changed_production_paths: &[String],
     timeout: Option<Duration>,
+    framework: TestFramework,
 ) -> Result<Option<MutationReport>> {
     let mut report = MutationReport::default();
 
@@ -134,6 +136,7 @@ pub fn analyze_mutations(
         &originals,
         &attempted,
         timeout,
+        framework,
         &tests_fingerprint,
         &mut cache,
         &mut report,
@@ -221,6 +224,7 @@ fn run_mutants(
     originals: &[(String, String)],
     attempted: &[Mutant],
     timeout: Option<Duration>,
+    framework: TestFramework,
     tests_fingerprint: &str,
     cache: &mut MutationCache,
     report: &mut MutationReport,
@@ -271,6 +275,7 @@ fn run_mutants(
             worktree,
             config.verification.max_output_bytes,
             timeout,
+            framework,
         );
         // Restore before classifying, so a failure below cannot leave the
         // mutant in place for the next iteration.

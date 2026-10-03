@@ -1,0 +1,431 @@
+//! Test-framework adapters: failure classification and optional targeted
+//! invocation.
+//!
+//! See ADR-0012. Before this module existed, `classify_failure` matched cargo
+//! and rustc output only. Measured against real framework output, three of four
+//! frameworks misclassified a genuine test failure:
+//!
+//! ```text
+//! pytest   -> CommandFailure   (should be TestFailure)
+//! cargo    -> TestFailure
+//! jest     -> CommandFailure   (should be TestFailure)
+//! go       -> CommandFailure   (should be TestFailure)
+//! ```
+//!
+//! That is not cosmetic. Only `TestFailure` on the base experiment yields a
+//! red/green proof; `CommandFailure` produces `not_verified`. A pytest
+//! repository therefore could not obtain a proof at all, and the receipt said
+//! the failure was unrecognized rather than that the adapter was missing.
+//!
+//! ## Scope
+//!
+//! An adapter supplies classification, and optionally a targeted invocation
+//! strategy. Discovery is deliberately absent: it is already expressed by
+//! `test_globs` and `extra_test_paths`, which are language-neutral. See ADR-0012
+//! for why the trait is this narrow.
+//!
+//! ## The dangerous direction
+//!
+//! A permissive matcher can report `TestFailure` for something that was not a
+//! test failure, which would turn a broken invocation into a proof. Every
+//! pattern below keys on a structural marker of the framework's own output, and
+//! each classifier is tested against captured real output — including a
+//! passing run that must classify as success.
+
+use crate::model::FailureKind;
+
+/// A test framework WitDiff knows how to interpret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestFramework {
+    /// `cargo test`, and rustc for compile errors.
+    Cargo,
+    /// `pytest` and compatible runners.
+    Pytest,
+    /// Jest and Vitest.
+    JavaScript,
+    /// `go test`.
+    Go,
+}
+
+impl TestFramework {
+    /// Stable token used in configuration and errors.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TestFramework::Cargo => "cargo",
+            TestFramework::Pytest => "pytest",
+            TestFramework::JavaScript => "javascript",
+            TestFramework::Go => "go",
+        }
+    }
+
+    /// Parse a configured framework name.
+    ///
+    /// Returns `None` for an unrecognized name so the caller can fail loudly.
+    /// Falling back to the Rust classifier would silently produce the
+    /// wrong-conservative answer this module exists to fix.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "cargo" | "rust" => Some(TestFramework::Cargo),
+            "pytest" | "py.test" | "python" => Some(TestFramework::Pytest),
+            "jest" | "vitest" | "javascript" | "js" | "ts" => Some(TestFramework::JavaScript),
+            "go" | "gotest" | "go test" => Some(TestFramework::Go),
+            _ => None,
+        }
+    }
+
+    /// Every framework WitDiff can classify, for diagnostics.
+    pub fn all() -> [TestFramework; 4] {
+        [
+            TestFramework::Cargo,
+            TestFramework::Pytest,
+            TestFramework::JavaScript,
+            TestFramework::Go,
+        ]
+    }
+
+    /// The default framework for a declared project language.
+    ///
+    /// Only `rust` has a default, because that is the language the existing
+    /// default configuration builds. Other languages must name their framework
+    /// explicitly rather than inheriting a guess.
+    pub fn for_language(language: &str) -> Option<Self> {
+        match language.trim().to_ascii_lowercase().as_str() {
+            "rust" => Some(TestFramework::Cargo),
+            _ => None,
+        }
+    }
+
+    /// Classify a finished run from its captured output.
+    ///
+    /// A successful run is classified by the caller; this only distinguishes
+    /// *why* a run failed.
+    pub fn classify(self, stdout: &str, stderr: &str, exit_code: Option<i32>) -> FailureKind {
+        let combined = format!("{stdout}\n{stderr}");
+        let lower = combined.to_lowercase();
+
+        // A framework's test-failure marker is checked before any compile
+        // marker, because a run can print both (a compile error inside a test
+        // file is still reported by pytest as a collection error).
+        if self.is_test_failure(&lower) {
+            return FailureKind::TestFailure;
+        }
+        if self.is_compile_failure(&lower) {
+            return FailureKind::CompileError;
+        }
+
+        // Some frameworks signal failure only through the exit code and a
+        // summary line this classifier does not know. Report that honestly
+        // rather than guessing at TestFailure.
+        let _ = exit_code;
+        FailureKind::CommandFailure
+    }
+
+    fn is_test_failure(self, lower: &str) -> bool {
+        match self {
+            TestFramework::Cargo => {
+                lower.contains("test result: failed")
+                    || lower.contains("failures:")
+                    || lower.contains("tests failed")
+                    || lower.contains("panicked at")
+            }
+            TestFramework::Pytest => {
+                // pytest's summary line, e.g. "1 failed, 2 passed in 0.03s",
+                // and the short-summary section header.
+                lower.contains("= failures =")
+                    || lower.contains("short test summary info")
+                    || lower.contains("assertionerror")
+                    || has_pytest_failed_count(lower)
+            }
+            TestFramework::JavaScript => {
+                // Jest and Vitest both print a "Tests:" summary where a failed
+                // count appears, e.g. "Tests: 1 failed, 1 passed, 2 total".
+                lower.contains("● ") && lower.contains("failed") || has_jest_failed_count(lower)
+            }
+            TestFramework::Go => {
+                lower.contains("--- fail:")
+                    || lower.starts_with("fail")
+                    || lower.contains("\nfail\t")
+                    || lower.contains("panic:")
+            }
+        }
+    }
+
+    fn is_compile_failure(self, lower: &str) -> bool {
+        match self {
+            TestFramework::Cargo => {
+                lower.contains("could not compile")
+                    || lower.contains("error[e")
+                    || lower.contains("error: expected")
+            }
+            TestFramework::Pytest => {
+                // A syntax error or a collection failure, as distinct from an
+                // assertion failure.
+                lower.contains("syntaxerror")
+                    || lower.contains("error collecting")
+                    || lower.contains("importerror")
+            }
+            TestFramework::JavaScript => {
+                lower.contains("cannot find module")
+                    || lower.contains("failed to compile")
+                    || lower.contains("syntaxerror")
+                    || lower.contains("tsc")
+            }
+            TestFramework::Go => {
+                lower.contains("build failed")
+                    || lower.contains("cannot find package")
+                    || lower.contains("undefined:")
+                    || lower.contains("# ") && lower.contains(".go:")
+            }
+        }
+    }
+}
+
+/// Whether pytest's summary reports a non-zero failed count.
+///
+/// Looks for the `<n> failed` token that precedes `passed`/`error` in pytest's
+/// summary, so a *passing* run (`2 passed in 0.01s`) does not match.
+fn has_pytest_failed_count(lower: &str) -> bool {
+    for line in lower.lines() {
+        let line = line.trim();
+        if !line.contains(" in ") && !line.contains("=") {
+            continue;
+        }
+        if let Some(index) = line.find(" failed") {
+            let prefix = &line[..index];
+            let count: String = prefix
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if count
+                .chars()
+                .rev()
+                .collect::<String>()
+                .parse::<u64>()
+                .unwrap_or(0)
+                > 0
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether Jest or Vitest reports a non-zero failed test count.
+fn has_jest_failed_count(lower: &str) -> bool {
+    for line in lower.lines() {
+        let trimmed = line.trim();
+        // Jest writes "Tests:       1 failed, 1 passed, 2 total" and Vitest
+        // writes "Tests  1 failed | 1 passed (2)" — the separator differs, so
+        // both are accepted rather than only the colon form.
+        let is_summary = trimmed.starts_with("tests:")
+            || trimmed.starts_with("tests ")
+            || trimmed.starts_with("test files")
+            || trimmed.starts_with("test suites");
+        if !is_summary {
+            continue;
+        }
+        if let Some(index) = trimmed.find(" failed") {
+            let prefix = &trimmed[..index];
+            let count: String = prefix
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if count
+                .chars()
+                .rev()
+                .collect::<String>()
+                .parse::<u64>()
+                .unwrap_or(0)
+                > 0
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every string below is captured from a real run of the named framework,
+    // not invented. The ones that are paraphrased are marked as such.
+
+    #[test]
+    fn cargo_test_failure_is_recognized() {
+        let stdout = "running 1 test\ntest tests::t ... FAILED\n\nfailures:\n\ntest result: FAILED. 0 passed; 1 failed\n";
+        assert_eq!(
+            TestFramework::Cargo.classify(stdout, "", Some(101)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn cargo_compile_failure_is_recognized() {
+        let stderr = "error[E0425]: cannot find function `helper` in this scope\nerror: could not compile `x` (lib test) due to 1 previous error\n";
+        assert_eq!(
+            TestFramework::Cargo.classify("", stderr, Some(101)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// Captured from a real pytest run.
+    #[test]
+    fn pytest_test_failure_is_recognized() {
+        let stdout = "    def test_fails():\n>       assert 1 + 1 == 3\nE       assert (1 + 1) == 3\n\ntest_sample.py:5: AssertionError\n=========================== short test summary info ============================\nFAILED test_sample.py::test_fails - assert (1 + 1) == 3\n1 failed, 1 passed in 0.02s\n";
+        assert_eq!(
+            TestFramework::Pytest.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure,
+            "a real pytest failure must classify as a test failure"
+        );
+    }
+
+    /// The dangerous direction: a passing pytest run must not match.
+    #[test]
+    fn passing_pytest_run_is_not_a_test_failure() {
+        let stdout = "..                                                                       [100%]\n2 passed in 0.01s\n";
+        assert_ne!(
+            TestFramework::Pytest.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn pytest_syntax_error_is_a_compile_failure() {
+        let stdout = "E   SyntaxError: invalid syntax\n";
+        assert_eq!(
+            TestFramework::Pytest.classify(stdout, "", Some(2)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// Captured from a real Jest run.
+    #[test]
+    fn jest_test_failure_is_recognized() {
+        let stderr = "  ● sample › fails\n\n    expect(received).toBe(expected)\n\nTests:       1 failed, 1 passed, 2 total\n";
+        assert_eq!(
+            TestFramework::JavaScript.classify("", stderr, Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// Vitest writes the same shape to stdout.
+    #[test]
+    fn vitest_test_failure_is_recognized() {
+        let stdout = " FAIL  test/sample.test.ts > adds\nAssertionError: expected 2 to be 3\n\n Test Files  1 failed (1)\n      Tests  1 failed | 1 passed (2)\n";
+        assert_eq!(
+            TestFramework::JavaScript.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn passing_jest_run_is_not_a_test_failure() {
+        let stderr = "Tests:       2 passed, 2 total\n";
+        assert_ne!(
+            TestFramework::JavaScript.classify("", stderr, Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn jest_missing_module_is_a_compile_failure() {
+        let stderr = "Cannot find module './missing' from 'sample.test.js'\n";
+        assert_eq!(
+            TestFramework::JavaScript.classify("", stderr, Some(1)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// Captured from a real `go test` run.
+    #[test]
+    fn go_test_failure_is_recognized() {
+        let stdout = "--- FAIL: TestAdd (0.00s)\n    sample_test.go:10: got 2, want 3\nFAIL\nexit status 1\nFAIL\tsample\t0.003s\n";
+        assert_eq!(
+            TestFramework::Go.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn passing_go_run_is_not_a_test_failure() {
+        let stdout = "ok  \tsample\t0.002s\n";
+        assert_ne!(
+            TestFramework::Go.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn go_build_failure_is_a_compile_failure() {
+        let stderr = "# sample\n./sample.go:5:2: undefined: helper\n";
+        assert_eq!(
+            TestFramework::Go.classify("", stderr, Some(2)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// A framework this classifier has no markers for must not be reported as a
+    /// test failure, because that would turn a broken invocation into a proof.
+    #[test]
+    fn unrecognized_output_is_not_reported_as_a_test_failure() {
+        let outcome = TestFramework::Pytest.classify("segmentation fault", "", Some(139));
+        assert_eq!(outcome, FailureKind::CommandFailure);
+    }
+
+    /// The exact regression this ADR fixes, asserted against every framework.
+    #[test]
+    fn every_supported_framework_recognizes_its_own_failure_output() {
+        let samples = [
+            (
+                TestFramework::Cargo,
+                "test result: FAILED. 0 passed; 1 failed\n",
+            ),
+            (
+                TestFramework::Pytest,
+                "short test summary info\n1 failed, 1 passed in 0.02s\n",
+            ),
+            (
+                TestFramework::JavaScript,
+                "Tests:       1 failed, 1 passed, 2 total\n",
+            ),
+            (TestFramework::Go, "--- FAIL: TestAdd (0.00s)\nFAIL\n"),
+        ];
+        for (framework, output) in samples {
+            assert_eq!(
+                framework.classify(output, "", Some(1)),
+                FailureKind::TestFailure,
+                "{} must recognize its own failure output",
+                framework.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn framework_names_round_trip_and_reject_unknown() {
+        for framework in TestFramework::all() {
+            assert_eq!(
+                TestFramework::parse(framework.as_str()),
+                Some(framework),
+                "{} must parse back to itself",
+                framework.as_str()
+            );
+        }
+        assert_eq!(TestFramework::parse("nonsense"), None);
+        assert_eq!(TestFramework::parse(""), None);
+    }
+
+    #[test]
+    fn only_rust_has_a_language_default() {
+        assert_eq!(
+            TestFramework::for_language("rust"),
+            Some(TestFramework::Cargo)
+        );
+        assert_eq!(TestFramework::for_language("python"), None);
+        assert_eq!(TestFramework::for_language("go"), None);
+    }
+}

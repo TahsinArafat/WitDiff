@@ -159,16 +159,30 @@ existed still parses.
 
 ## P4 — adapters
 
-### PG-401: pytest adapter
-### PG-402: Vitest/Jest adapter
-### PG-403: Go test adapter
+### PG-401/402/403: pytest, Vitest/Jest, Go adapters
 
-Each adapter owns:
+Status: failure classification done (ADR-0012); targeted invocation not started.
 
-- dedicated test discovery;
-- failure classification;
-- targeted invocation capability;
-- framework/environment fingerprint additions.
+The backlog described each adapter as owning discovery, failure classification,
+targeted invocation and fingerprint additions. Only classification was built,
+deliberately: discovery is already expressed by `test_globs` and
+`extra_test_paths`, which are language-neutral, and adding it to the adapter
+trait would duplicate a working mechanism behind a worse interface.
+
+Implemented: `witdiff_core::framework` classifies cargo, pytest, Jest/Vitest and
+Go output, selected explicitly via `verification.framework`. Before this, three
+of four frameworks misclassified a genuine test failure as `CommandFailure`,
+which cannot produce a proof.
+
+Still open:
+
+- targeted invocation for non-Rust frameworks, so a narrowed run is possible
+  where the framework supports it;
+- structure-aware test-integrity analysis (ADR-0006) for other languages;
+- mutation operators (ADR-0011) for other languages.
+
+Until those exist, a non-Rust repository gets a red/green proof and a
+line-oriented integrity fallback rather than structural analysis.
 
 ## P5 — integrations
 

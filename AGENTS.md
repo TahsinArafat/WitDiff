@@ -75,13 +75,13 @@ Read `docs/roadmap.md`. High-value tasks currently are:
 1. resolving `let` bindings so a rebound subject is not reported as a removal;
 2. removed-error-check detection in the structural analyzer;
 3. the remaining mutation operators (condition negation, numeric return substitution);
-4. adapters for pytest/Vitest/Jest/Go test;
+4. targeted invocation and structural integrity analysis for the non-Rust adapters (ADR-0012);
 5. MCP wrapper only after the CLI/receipt contract is stable.
 
 Integration tests, syntax-aware integrity analysis including `match`-arm
 comparison, targeted test selection, inline `#[cfg(test)]` transplantation
-(ADR-0010), and changed-code mutation (ADR-0011) are done; see `docs/roadmap.md`
-for what shipped.
+(ADR-0010), changed-code mutation (ADR-0011), and framework-specific failure
+classification (ADR-0012) are done; see `docs/roadmap.md` for what shipped.
 
 ## What not to build yet
 

@@ -125,6 +125,25 @@ Production changes elsewhere in the same file do **not** block the splice. A
 commit that fixes a bug and tightens its inline test is the normal shape of a
 change, and the production change is simply not transplanted.
 
+## Framework classification
+
+Whether the base experiment proves anything depends on classifying *why* it
+failed. Only a recognized test failure yields a red/green proof; a compile error
+yields `base_incompatible` and anything unrecognized yields `not_verified`
+(ADR-0003).
+
+That classification is framework-specific, because a framework's failure output
+is (ADR-0012). WitDiff recognizes cargo, pytest, Jest/Vitest and Go. The
+framework is named explicitly by `verification.framework` rather than sniffed
+from output, because inferring it from text the candidate controls could turn a
+broken invocation into a proof. An unrecognized name is an error, not a silent
+fallback — silently using the wrong classifier is the failure this exists to
+prevent.
+
+Patterns key on each framework's own structural markers rather than generic
+English, and every classifier is tested against captured real output including a
+passing run, so a green suite is never reported as a test failure.
+
 ## Changed-code mutation
 
 Mutation answers a question the red/green experiment cannot: a transplanted test

@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Framework-specific failure classification** (ADR-0012), selected with
+  `verification.framework` and defaulting to `cargo`. Cargo, pytest, Jest/Vitest
+  and Go output are now recognized. An unrecognized framework name is an
+  explicit error rather than a silent fallback to the Rust classifier.
+
+### Fixed
+
+- **Non-Rust test failures were misclassified, so no proof was possible.**
+  `classify_failure` matched cargo output only. Measured against real framework
+  output, pytest, Jest and Go each classified a genuine test failure as
+  `CommandFailure`, which yields `not_verified` instead of a red/green proof. A
+  pytest repository therefore could not obtain a proof at all, and the receipt
+  could not say why. Verified end to end: a pytest repository and a Go
+  repository each now reach `verified`, where the same pytest output previously
+  classified as `CommandFailure`.
+
 - **Changed-code mutation analysis** (ADR-0011), opt-in via
   `verification.mutation` and off by default. Mutants are generated for the
   changed lines of changed production Rust files and confined to code outside

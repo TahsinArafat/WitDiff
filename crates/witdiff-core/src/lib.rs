@@ -1,4 +1,5 @@
 pub mod config;
+pub mod framework;
 pub mod git;
 pub mod inline;
 pub mod integrity;

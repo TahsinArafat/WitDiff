@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 
+use crate::framework::TestFramework;
 use crate::model::{FailureKind, RunResult};
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,7 @@ pub fn run(
     cwd: &Path,
     max_output_bytes: usize,
     timeout: Option<Duration>,
+    framework: TestFramework,
 ) -> Result<RunResult> {
     if !cwd.is_dir() {
         bail!("test working directory does not exist: {}", cwd.display());
@@ -120,6 +122,7 @@ pub fn run(
                             timed_out,
                             None,
                             false,
+                            framework,
                         );
                     }
                 }
@@ -141,6 +144,7 @@ pub fn run(
         timed_out,
         status.code(),
         status.success(),
+        framework,
     )
 }
 
@@ -159,6 +163,7 @@ fn finish(
     timed_out: bool,
     exit_code: Option<i32>,
     success: bool,
+    framework: TestFramework,
 ) -> Result<RunResult> {
     // The readers finish once the child's pipes close, which happens on exit.
     let stdout_raw = stdout_reader.join().unwrap_or_default();
@@ -173,7 +178,7 @@ fn finish(
     } else if timed_out {
         Some(FailureKind::Timeout)
     } else {
-        Some(classify_failure(&stdout, &stderr))
+        Some(framework.classify(&stdout, &stderr, exit_code))
     };
 
     Ok(RunResult {
@@ -226,20 +231,7 @@ extern "C" {
 }
 
 pub fn classify_failure(stdout: &str, stderr: &str) -> FailureKind {
-    let combined = format!("{stdout}\n{stderr}").to_lowercase();
-    if combined.contains("test result: failed")
-        || combined.contains("failures:")
-        || combined.contains("tests failed")
-    {
-        FailureKind::TestFailure
-    } else if combined.contains("could not compile")
-        || combined.contains("error[e")
-        || combined.contains("error: could not compile")
-    {
-        FailureKind::CompileError
-    } else {
-        FailureKind::CommandFailure
-    }
+    TestFramework::Cargo.classify(stdout, stderr, None)
 }
 
 fn bounded_tail(text: &str, max_bytes: usize) -> String {
@@ -288,6 +280,7 @@ mod tests {
             &cwd,
             4096,
             Some(Duration::from_secs(30)),
+            TestFramework::Cargo,
         )
         .expect("run should succeed");
         assert!(result.success);
@@ -303,6 +296,7 @@ mod tests {
             &cwd,
             4096,
             Some(Duration::from_secs(30)),
+            TestFramework::Cargo,
         )
         .expect("run should complete");
         assert!(!result.success);
@@ -318,6 +312,7 @@ mod tests {
             &cwd,
             4096,
             Some(Duration::from_secs(5)),
+            TestFramework::Cargo,
         )
         .expect_err("a missing program must be an explicit error");
         assert!(
@@ -340,6 +335,7 @@ mod tests {
             &cwd,
             4096,
             Some(Duration::from_millis(700)),
+            TestFramework::Cargo,
         )
         .expect("a timeout is reported, not raised as a tool error");
 
@@ -364,6 +360,7 @@ mod tests {
             &cwd,
             4096,
             Some(Duration::from_secs(60)),
+            TestFramework::Cargo,
         )
         .expect("large output must be drained, not deadlock");
 
@@ -377,7 +374,8 @@ mod tests {
     #[test]
     fn no_timeout_configured_still_completes() {
         let cwd = std::env::temp_dir();
-        let result = run(&spec("true", &[]), &cwd, 4096, None).expect("run should succeed");
+        let result = run(&spec("true", &[]), &cwd, 4096, None, TestFramework::Cargo)
+            .expect("run should succeed");
         assert!(result.success);
         assert!(!result.timed_out);
     }
