@@ -63,6 +63,19 @@ enum Commands {
         /// Do not persist a receipt file.
         #[arg(long)]
         no_write: bool,
+        /// Treat `no_changed_tests` as a gate failure.
+        ///
+        /// Off by default: a change with no tests is not a failed proof, and
+        /// failing it would make the check unusable on unrelated pull requests
+        /// (ADR-0013).
+        #[arg(long)]
+        fail_on_no_changed_tests: bool,
+        /// Emit GitHub Actions workflow commands for the status and findings.
+        ///
+        /// Escaping is done here rather than in a workflow YAML file, so every
+        /// consumer gets correctly escaped annotations (ADR-0013).
+        #[arg(long)]
+        github_annotations: bool,
     },
     /// Print the most recent receipt.
     Receipt {
@@ -102,15 +115,21 @@ fn run() -> Result<ExitCode> {
             keep_worktree,
             output,
             no_write,
+            fail_on_no_changed_tests,
+            github_annotations,
         } => verify(
             &start,
-            base,
-            command,
-            json,
-            strict,
-            keep_worktree,
-            output,
-            no_write,
+            VerifyArgs {
+                base,
+                command,
+                json,
+                strict,
+                keep_worktree,
+                output,
+                no_write,
+                fail_on_no_changed_tests,
+                github_annotations,
+            },
         ),
         Commands::Receipt { path, json } => receipt(&start, path, json),
     }
@@ -197,8 +216,12 @@ fn inspect(start: &Path, base: Option<&str>, json: bool) -> Result<ExitCode> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn verify(
-    start: &Path,
+/// Options for `verify`.
+///
+/// A struct rather than positional parameters: the command now carries several
+/// independent booleans, and a call site passing eight bare arguments is where
+/// transposition mistakes happen.
+struct VerifyArgs {
     base: Option<String>,
     command: Option<String>,
     json: bool,
@@ -206,7 +229,22 @@ fn verify(
     keep_worktree: bool,
     output: Option<PathBuf>,
     no_write: bool,
-) -> Result<ExitCode> {
+    fail_on_no_changed_tests: bool,
+    github_annotations: bool,
+}
+
+fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
+    let VerifyArgs {
+        base,
+        command,
+        json,
+        strict,
+        keep_worktree,
+        output,
+        no_write,
+        fail_on_no_changed_tests,
+        github_annotations,
+    } = args;
     let repo = GitRepo::discover(start)?;
     let config = Config::load(repo.root())?;
     let command = command
@@ -240,16 +278,111 @@ fn verify(
         print_receipt_summary(&receipt);
     }
 
-    let ok = if strict {
-        receipt.status.is_strictly_verified()
-    } else {
-        receipt.status.is_verified()
-    };
-    Ok(if ok {
+    if github_annotations {
+        print_github_annotations(&receipt, strict, fail_on_no_changed_tests);
+    }
+
+    let gate = receipt.status.gate(strict, fail_on_no_changed_tests);
+    Ok(if gate.passes() {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(2)
     })
+}
+
+/// Escape a string for a GitHub Actions workflow command.
+///
+/// The command format is `::name key=value::message`, and the percent, carriage
+/// return and newline characters must be escaped in the message. Receipt
+/// messages contain quotes, backticks and occasionally newlines, so getting
+/// this wrong produces a malformed annotation rather than a visible error.
+fn escape_github_command(text: &str) -> String {
+    text.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+/// Escape a workflow-command *property* value, which has a wider escape set.
+fn escape_github_property(text: &str) -> String {
+    escape_github_command(text)
+        .replace(':', "%3A")
+        .replace(',', "%2C")
+}
+
+/// Emit GitHub Actions annotations for a receipt.
+///
+/// Written to stdout as workflow commands so the workflow file needs no logic
+/// and no string escaping of its own (ADR-0013).
+fn print_github_annotations(
+    receipt: &witdiff_core::Receipt,
+    strict: bool,
+    fail_on_no_changed_tests: bool,
+) {
+    let gate = receipt.status.gate(strict, fail_on_no_changed_tests);
+    let summary = format!(
+        "WitDiff: {} ({} changed test file(s), {} changed production file(s))",
+        receipt.status.as_str(),
+        receipt.changed_test_files.len(),
+        receipt
+            .changed_files
+            .iter()
+            .filter(|file| !file.is_test)
+            .count()
+    );
+
+    match gate {
+        witdiff_core::model::GateOutcome::Failed => {
+            println!("::error::{}", escape_github_command(&summary));
+        }
+        witdiff_core::model::GateOutcome::NothingToProve => {
+            // A notice, not a warning: the receipt is correct, there was simply
+            // nothing to prove.
+            println!("::notice::{}", escape_github_command(&summary));
+        }
+        witdiff_core::model::GateOutcome::Satisfied => {
+            println!("::notice::{}", escape_github_command(&summary));
+        }
+    }
+
+    for finding in &receipt.integrity_findings {
+        let level = match finding.severity {
+            witdiff_core::Severity::High => "error",
+            witdiff_core::Severity::Warning => "warning",
+            witdiff_core::Severity::Info => "notice",
+        };
+        println!(
+            "::{level} file={},line={},title={}::{}",
+            escape_github_property(&finding.path),
+            finding.line,
+            escape_github_property(&format!("witdiff {}", finding.rule)),
+            escape_github_command(&finding.message)
+        );
+    }
+
+    if let Some(mutation) = &receipt.mutation {
+        for result in mutation
+            .results
+            .iter()
+            .filter(|result| result.outcome == witdiff_core::model::MutantOutcome::Survived)
+        {
+            println!(
+                "::warning file={},line={},title={}::{}",
+                escape_github_property(&result.path),
+                result.line,
+                escape_github_property("witdiff survived mutant"),
+                escape_github_command(&format!(
+                    "a mutant survived: `{}` -> `{}` in {}. The changed tests do not detect this change.",
+                    result.original,
+                    result.replacement,
+                    result.function.as_deref().unwrap_or("this code")
+                ))
+            );
+        }
+    }
+
+    for note in &receipt.notes {
+        println!("::notice::{}", escape_github_command(note));
+    }
 }
 
 fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> {
@@ -404,4 +537,41 @@ fn command_exists(program: &str, args: &[&str]) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A newline in a message would terminate the workflow command early and
+    /// silently truncate the annotation, so it must be escaped.
+    #[test]
+    fn github_message_escaping_covers_newlines_and_percent() {
+        assert_eq!(escape_github_command("a\nb"), "a%0Ab");
+        assert_eq!(escape_github_command("a\rb"), "a%0Db");
+        assert_eq!(escape_github_command("100% done"), "100%25 done");
+        // A literal backslash-n is not a newline and must survive.
+        assert_eq!(escape_github_command("a\\nb"), "a\\nb");
+    }
+
+    /// Property values live inside `key=value,` and must also escape the
+    /// delimiters, or the command is parsed as having extra properties.
+    #[test]
+    fn github_property_escaping_covers_delimiters() {
+        assert_eq!(escape_github_property("a:b"), "a%3Ab");
+        assert_eq!(escape_github_property("a,b"), "a%2Cb");
+        // A Windows path is the realistic case: `C:\dir` would otherwise be
+        // read as the property name `C`.
+        assert_eq!(escape_github_property("C:\\dir"), "C%3A\\dir");
+    }
+
+    /// The realistic message: receipt findings contain quotes and backticks.
+    #[test]
+    fn a_typical_finding_message_is_escaped_not_broken() {
+        let message = "test `t` changed the expected value from `10` to `20`\nand more";
+        let escaped = escape_github_command(message);
+        assert!(!escaped.contains('\n'), "no raw newline may survive");
+        assert!(escaped.contains("%0A"));
+        assert!(escaped.contains('`'), "backticks need no escaping");
+    }
 }

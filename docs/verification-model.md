@@ -125,6 +125,31 @@ Production changes elsewhere in the same file do **not** block the splice. A
 commit that fixes a bug and tightens its inline test is the normal shape of a
 change, and the production change is simply not transplanted.
 
+## Gating in CI
+
+The CLI's exit code is a three-way signal, and CI treats statuses in three
+classes rather than two (ADR-0013):
+
+- `0` — the claim was proven, or there was nothing to prove;
+- `1` — WitDiff itself failed to run, which is a tool error rather than a
+  verification result;
+- `2` — verification did not pass.
+
+Exit code 2 is a failed gate, never a crash to be retried.
+
+Which statuses pass is deliberately not "everything except `verified`":
+
+- `verified` passes, and `verified_with_warnings` passes unless `--strict`;
+- `no_changed_tests` passes and is reported as *nothing to prove*, so a pass is
+  never mistaken for a proof. `--fail-on-no-changed-tests` reverses this for
+  repositories that require a test change per pull request;
+- `not_verified`, `head_failed` and `base_incompatible` fail. Undecidable is not
+  acceptable as a gate, because `base_incompatible` means no behavioral proof
+  was established and that is actionable.
+
+The policy lives in `VerificationStatus::gate`, not in a workflow file, so every
+consumer — CI, an MCP client, a local script — reaches the same verdict.
+
 ## Framework classification
 
 Whether the base experiment proves anything depends on classifying *why* it

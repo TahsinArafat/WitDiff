@@ -126,6 +126,37 @@ pub enum VerificationStatus {
     BaseIncompatible,
 }
 
+/// How a verification status should be treated as a gate.
+///
+/// Three classes rather than two, because "no proof was attempted" is not the
+/// same as "the proof failed" (ADR-0013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateOutcome {
+    /// The claim was proven, under the configured strictness.
+    Satisfied,
+    /// No proof was attempted because there was nothing to prove. Reported
+    /// distinctly so a pass is never mistaken for a proof.
+    NothingToProve,
+    /// A proof was attempted and did not establish the claim, or the case was
+    /// undecidable.
+    Failed,
+}
+
+impl GateOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GateOutcome::Satisfied => "satisfied",
+            GateOutcome::NothingToProve => "nothing_to_prove",
+            GateOutcome::Failed => "failed",
+        }
+    }
+
+    /// Whether the gate passes.
+    pub fn passes(self) -> bool {
+        !matches!(self, GateOutcome::Failed)
+    }
+}
+
 impl VerificationStatus {
     pub fn is_verified(&self) -> bool {
         matches!(self, Self::Verified | Self::VerifiedWithWarnings)
@@ -133,6 +164,41 @@ impl VerificationStatus {
 
     pub fn is_strictly_verified(&self) -> bool {
         matches!(self, Self::Verified)
+    }
+
+    /// Whether this status means no proof was attempted, because there was
+    /// nothing to prove.
+    ///
+    /// Distinct from a failure: the receipt is correct and the change simply
+    /// contained no tests to transplant. CI gating treats this as satisfied by
+    /// default, because failing a documentation-only pull request teaches
+    /// operators to disable the check (ADR-0013).
+    pub fn is_nothing_to_prove(&self) -> bool {
+        matches!(self, Self::NoChangedTests)
+    }
+
+    /// How CI should treat this status, given the configured strictness.
+    ///
+    /// The policy lives here rather than in a workflow file so that every
+    /// consumer — CI, MCP, a local script — reaches the same verdict.
+    pub fn gate(&self, strict: bool, fail_on_no_changed_tests: bool) -> GateOutcome {
+        if self.is_nothing_to_prove() {
+            return if fail_on_no_changed_tests {
+                GateOutcome::Failed
+            } else {
+                GateOutcome::NothingToProve
+            };
+        }
+        let satisfied = if strict {
+            self.is_strictly_verified()
+        } else {
+            self.is_verified()
+        };
+        if satisfied {
+            GateOutcome::Satisfied
+        } else {
+            GateOutcome::Failed
+        }
     }
 
     /// Stable machine-facing token. This must always agree with the value
@@ -464,5 +530,113 @@ mod tests {
             "\"targeted\""
         );
         assert_eq!(TestSelection::Targeted.to_string(), "targeted");
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    /// The change this ADR makes: a correct receipt with nothing to prove must
+    /// not be reported as a gate failure.
+    #[test]
+    fn no_changed_tests_passes_by_default_but_is_labelled_truthfully() {
+        let outcome = VerificationStatus::NoChangedTests.gate(true, false);
+        assert_eq!(outcome, GateOutcome::NothingToProve);
+        assert!(outcome.passes(), "nothing to prove must not fail the gate");
+        assert_ne!(
+            outcome,
+            GateOutcome::Satisfied,
+            "it must not be reported as a proof either"
+        );
+    }
+
+    #[test]
+    fn fail_on_no_changed_tests_restores_the_strict_behavior() {
+        assert_eq!(
+            VerificationStatus::NoChangedTests.gate(true, true),
+            GateOutcome::Failed
+        );
+    }
+
+    /// A proof was attempted and failed. This is the outcome the tool exists to
+    /// report, so it must never pass.
+    #[test]
+    fn not_verified_always_fails() {
+        assert_eq!(
+            VerificationStatus::NotVerified.gate(false, false),
+            GateOutcome::Failed
+        );
+        assert_eq!(
+            VerificationStatus::NotVerified.gate(true, false),
+            GateOutcome::Failed
+        );
+    }
+
+    #[test]
+    fn head_failed_always_fails() {
+        assert_eq!(
+            VerificationStatus::HeadFailed.gate(false, false),
+            GateOutcome::Failed
+        );
+    }
+
+    /// Undecidable is not acceptable as a gate: ADR-0003 exists precisely to
+    /// flag this case rather than let it pass.
+    #[test]
+    fn base_incompatible_fails_as_undecidable() {
+        assert_eq!(
+            VerificationStatus::BaseIncompatible.gate(false, false),
+            GateOutcome::Failed
+        );
+    }
+
+    #[test]
+    fn warnings_pass_unless_strict() {
+        assert_eq!(
+            VerificationStatus::VerifiedWithWarnings.gate(false, false),
+            GateOutcome::Satisfied
+        );
+        assert_eq!(
+            VerificationStatus::VerifiedWithWarnings.gate(true, false),
+            GateOutcome::Failed
+        );
+    }
+
+    #[test]
+    fn verified_passes_in_both_modes() {
+        assert_eq!(
+            VerificationStatus::Verified.gate(false, false),
+            GateOutcome::Satisfied
+        );
+        assert_eq!(
+            VerificationStatus::Verified.gate(true, false),
+            GateOutcome::Satisfied
+        );
+    }
+
+    /// Every status must map to a defined outcome, so no case is accidental.
+    #[test]
+    fn every_status_has_a_defined_gate_outcome() {
+        let statuses = [
+            VerificationStatus::Verified,
+            VerificationStatus::VerifiedWithWarnings,
+            VerificationStatus::NotVerified,
+            VerificationStatus::NoChangedTests,
+            VerificationStatus::HeadFailed,
+            VerificationStatus::BaseIncompatible,
+        ];
+        for status in statuses {
+            let loose = status.gate(false, false);
+            let strict = status.gate(true, false);
+            // Strictness may only ever make the gate harder, never easier.
+            if strict.passes() {
+                assert!(
+                    loose.passes(),
+                    "strict mode must not be more permissive than default for {:?}",
+                    status
+                );
+            }
+        }
     }
 }

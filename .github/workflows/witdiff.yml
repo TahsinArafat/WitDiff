@@ -1,0 +1,120 @@
+name: WitDiff
+
+# Reusable workflow: verify that changed tests actually prove the change.
+#
+# Pair with a caller in the consuming repository:
+#
+#   jobs:
+#     witdiff:
+#       uses: TahsinArafat/WitDiff/.github/workflows/witdiff.yml@main
+#       with:
+#         base-ref: ${{ github.base_ref }}
+#
+# The policy about which statuses pass lives in the CLI, not here (ADR-0013),
+# so an MCP client, a local script and this workflow all reach the same verdict.
+
+on:
+  workflow_call:
+    inputs:
+      base-ref:
+        description: Git ref to verify against, normally the pull request base branch.
+        required: false
+        type: string
+        default: main
+      strict:
+        description: Require exactly `verified`, not `verified_with_warnings`.
+        required: false
+        type: boolean
+        default: false
+      fail-on-no-changed-tests:
+        description: Treat a change with no tests as a gate failure.
+        required: false
+        type: boolean
+        default: false
+      witdiff-ref:
+        description: Ref of WitDiff to build.
+        required: false
+        type: string
+        default: main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the candidate repository
+        uses: actions/checkout@v4
+        with:
+          # A full history is required: the base revision has to exist locally
+          # for the experiment to create a worktree at it.
+          fetch-depth: 0
+
+      - name: Check out WitDiff
+        uses: actions/checkout@v4
+        with:
+          repository: TahsinArafat/WitDiff
+          ref: ${{ inputs.witdiff-ref }}
+          path: .witdiff-tool
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build WitDiff
+        run: cargo build --release --manifest-path .witdiff-tool/Cargo.toml -p witdiff
+
+      - name: Fetch the base branch
+        run: git fetch --no-tags origin "${{ inputs.base-ref }}"
+
+      - name: Verify
+        id: verify
+        # The step is allowed to fail so the annotations are emitted before the
+        # job fails; the exit code is honoured in the final step instead.
+        continue-on-error: true
+        env:
+          WITDIFF: 1
+        run: |
+          set -o pipefail
+          ./.witdiff-tool/target/release/witdiff verify \
+            --base "origin/${{ inputs.base-ref }}" \
+            --github-annotations \
+            ${{ inputs.strict && '--strict' || '' }} \
+            ${{ inputs.fail-on-no-changed-tests && '--fail-on-no-changed-tests' || '' }} \
+            2>&1 | tee witdiff-output.txt
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## WitDiff verification"
+            echo
+            echo '```'
+            cat witdiff-output.txt 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo
+            echo "The receipt is written to \`.witdiff/receipt.json\` in the candidate"
+            echo "workspace. Upload it as an artifact if you need it after the run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: witdiff-receipt
+          path: .witdiff/receipt.json
+          if-no-files-found: warn
+
+      - name: Enforce the verdict
+        run: |
+          code="${{ steps.verify.outputs.exit_code }}"
+          if [ "$code" = "0" ]; then
+            exit 0
+          fi
+          # Exit code 2 is a failed verification gate, not a tool crash.
+          # Exit code 1 is a WitDiff malfunction and is reported as such.
+          if [ "$code" = "2" ]; then
+            echo "::error::WitDiff verification did not pass (exit 2). See the annotations above."
+          else
+            echo "::error::WitDiff failed to run (exit $code); this is a tool error, not a verification result."
+          fi
+          exit 1

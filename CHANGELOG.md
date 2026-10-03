@@ -4,6 +4,27 @@
 
 ### Added
 
+- **GitHub Actions integration**: a reusable workflow
+  (`.github/workflows/witdiff.yml`) and `--github-annotations`, which emits
+  workflow commands for the status and every integrity finding. Escaping is done
+  in the CLI rather than in workflow YAML, so no consumer re-implements it and a
+  message containing quotes, backticks or newlines cannot produce a malformed
+  annotation.
+- **`--fail-on-no-changed-tests`**, for repositories that require a test change
+  per pull request.
+- An expanded drop-in agent instruction package (`examples/agent-instruction.txt`)
+  covering the three-way exit code, every status, and the reporting rules.
+
+### Changed
+
+- **`--strict` no longer fails when there is nothing to prove.** `no_changed_tests`
+  now passes by default and is reported as `nothing_to_prove` rather than as a
+  gate failure, because failing a documentation-only pull request on a correct
+  receipt teaches operators to disable the check (ADR-0013). The gate policy
+  lives in the core (`VerificationStatus::gate`) so CI, MCP and local scripts
+  reach the same verdict, and `--fail-on-no-changed-tests` restores the previous
+  behavior explicitly.
+
 - **Framework-specific failure classification** (ADR-0012), selected with
   `verification.framework` and defaulting to `cargo`. Cargo, pytest, Jest/Vitest
   and Go output are now recognized. An unrecognized framework name is an

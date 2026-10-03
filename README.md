@@ -62,6 +62,7 @@ Implemented:
 - JSON receipt persistence
 - human and JSON CLI output
 - `init`, `doctor`, `inspect`, `verify`, and `receipt` commands
+- a reusable GitHub Actions workflow and `--github-annotations` for PR checks
 
 Rust inline `#[cfg(test)] mod tests` blocks are transplanted by span splicing: only the test module's bytes move, so production changes elsewhere in the same file stay at the base revision. A file is refused, and the reason recorded, when it cannot be spliced safely (`unparsable`, `no_counterpart_in_base`, `test_outside_test_module`). See ADR-0010.
 
@@ -170,7 +171,7 @@ The next milestones are intentionally ordered so agents can work independently:
 - resolving `let` bindings so a rebound subject is not reported as a removal;
 - targeted invocation and structural integrity analysis for the non-Rust adapters;
 - receipt signing/attestation;
-- GitHub Actions integration and PR annotations;
+- an MCP server as a thin wrapper over the deterministic engine;
 - MCP server as a thin wrapper over the deterministic engine.
 
 See [`docs/roadmap.md`](docs/roadmap.md) for concrete work items.

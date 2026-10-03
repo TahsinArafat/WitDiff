@@ -79,11 +79,18 @@ and mutation, which remain Rust-only.
 
 ## M5 — ecosystem integrations
 
-- [ ] GitHub Actions reusable workflow
-- [ ] PR annotations/check summary
-- [ ] universal agent skill/instruction package
+- [x] GitHub Actions reusable workflow (`.github/workflows/witdiff.yml`)
+- [x] PR annotations/check summary (`--github-annotations`; see ADR-0013)
+- [x] universal agent skill/instruction package (`examples/agent-instruction.txt`)
 - [ ] MCP server wrapping core methods
 - [ ] signed/attested receipts
+
+CI gating treats "nothing to prove" as distinct from "the proof failed", so a
+documentation-only pull request no longer fails the check. The policy lives in
+the CLI rather than the workflow file, so CI, MCP and local scripts agree.
+
+Signed receipts remain undesigned: PG-503 requires an ADR identifying what is
+signed, the key management assumptions and replay semantics before any code.
 
 ## M6 — advanced evidence
 

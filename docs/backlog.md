@@ -186,6 +186,16 @@ line-oriented integrity fallback rather than structural analysis.
 
 ## P5 — integrations
 
+### PG-500: CI gating and annotations
+
+Status: done (ADR-0013). `--github-annotations` emits workflow commands for the
+status and every finding, with escaping done in the CLI so no consumer
+re-implements it. `.github/workflows/witdiff.yml` is a reusable workflow.
+
+The gate policy distinguishes `no_changed_tests` (nothing to prove) from a
+failed proof. `--strict` keeps its meaning; `--fail-on-no-changed-tests`
+restores the previous fail-on-everything behavior.
+
 ### PG-501: generic MCP server
 
 Thin protocol wrapper. It may expose `inspect`, `verify`, and `receipt`; it must call `witdiff-core` and must not create an alternative verification implementation.
