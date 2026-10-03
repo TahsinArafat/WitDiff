@@ -45,6 +45,8 @@ pub enum TestFramework {
     JavaScript,
     /// `go test`.
     Go,
+    /// Maven Surefire, Gradle test, and JUnit runners.
+    Java,
 }
 
 impl TestFramework {
@@ -55,6 +57,7 @@ impl TestFramework {
             TestFramework::Pytest => "pytest",
             TestFramework::JavaScript => "javascript",
             TestFramework::Go => "go",
+            TestFramework::Java => "java",
         }
     }
 
@@ -69,17 +72,19 @@ impl TestFramework {
             "pytest" | "py.test" | "python" => Some(TestFramework::Pytest),
             "jest" | "vitest" | "javascript" | "js" | "ts" => Some(TestFramework::JavaScript),
             "go" | "gotest" | "go test" => Some(TestFramework::Go),
+            "java" | "junit" | "maven" | "mvn" | "gradle" => Some(TestFramework::Java),
             _ => None,
         }
     }
 
     /// Every framework WitDiff can classify, for diagnostics.
-    pub fn all() -> [TestFramework; 4] {
+    pub fn all() -> [TestFramework; 5] {
         [
             TestFramework::Cargo,
             TestFramework::Pytest,
             TestFramework::JavaScript,
             TestFramework::Go,
+            TestFramework::Java,
         ]
     }
 
@@ -147,6 +152,18 @@ impl TestFramework {
                     || lower.contains("\nfail\t")
                     || lower.contains("panic:")
             }
+            TestFramework::Java => {
+                // Surefire's summary line, e.g.
+                // "Tests run: 2, Failures: 1, Errors: 0, Skipped: 0".
+                // Both Maven and Gradle print a non-zero Failures or Errors
+                // count, and both print the assertion error class name.
+                has_surefire_failure_count(lower)
+                    || lower.contains("assertionfailederror")
+                    || lower.contains("assertionerror")
+                    || lower.contains("comparisonfailure")
+                    || lower.contains("<<< failure!")
+                    || lower.contains("tests completed, ") && lower.contains(" failed")
+            }
         }
     }
 
@@ -175,6 +192,16 @@ impl TestFramework {
                     || lower.contains("cannot find package")
                     || lower.contains("undefined:")
                     || lower.contains("# ") && lower.contains(".go:")
+            }
+            TestFramework::Java => {
+                // Maven prints "COMPILATION ERROR" and Gradle prints
+                // "compileJava FAILED" or a Kotlin/Java compile error.
+                lower.contains("compilation error")
+                    || lower.contains("compilation failure")
+                    || lower.contains("compilejava failed")
+                    || lower.contains("compiletestjava failed")
+                    || lower.contains("cannot find symbol")
+                    || lower.contains("error: ';' expected")
             }
         }
     }
@@ -206,6 +233,31 @@ fn has_pytest_failed_count(lower: &str) -> bool {
                 > 0
             {
                 return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether Maven Surefire reports a non-zero failure or error count.
+///
+/// The summary line is `Tests run: N, Failures: F, Errors: E, Skipped: S`, so a
+/// *passing* run (`Failures: 0, Errors: 0`) must not match.
+fn has_surefire_failure_count(lower: &str) -> bool {
+    for line in lower.lines() {
+        if !line.contains("tests run:") {
+            continue;
+        }
+        for label in ["failures:", "errors:"] {
+            if let Some(index) = line.find(label) {
+                let count: String = line[index + label.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if count.parse::<u64>().unwrap_or(0) > 0 {
+                    return true;
+                }
             }
         }
     }
@@ -427,5 +479,74 @@ mod tests {
         );
         assert_eq!(TestFramework::for_language("python"), None);
         assert_eq!(TestFramework::for_language("go"), None);
+    }
+}
+
+#[cfg(test)]
+mod java_tests {
+    use super::*;
+
+    /// Captured from Maven Surefire output.
+    #[test]
+    fn maven_test_failure_is_recognized() {
+        let stdout = "[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.05 s <<< FAILURE! -- in CalcTest\n[ERROR] CalcTest.adds -- Time elapsed: 0.01 s <<< FAILURE!\norg.opentest4j.AssertionFailedError: expected: <2> but was: <3>\n\n[INFO] BUILD FAILURE\n";
+        assert_eq!(
+            TestFramework::Java.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// Captured from Gradle output.
+    #[test]
+    fn gradle_test_failure_is_recognized() {
+        let stdout = "CalcTest > adds FAILED\n    org.opentest4j.AssertionFailedError at CalcTest.java:8\n\n2 tests completed, 1 failed\nFAILURE: Build failed with an exception.\n";
+        assert_eq!(
+            TestFramework::Java.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// The dangerous direction: a passing Maven run must not be reported as a
+    /// test failure, or a broken invocation could look like a proof.
+    #[test]
+    fn passing_maven_run_is_not_a_test_failure() {
+        let stdout = "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.03 s -- in CalcTest\n[INFO] BUILD SUCCESS\n";
+        assert_ne!(
+            TestFramework::Java.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// A Maven compile failure is a compile error, not a test failure.
+    #[test]
+    fn maven_compilation_error_is_a_compile_failure() {
+        let stdout = "[ERROR] COMPILATION ERROR :\n[ERROR] /src/test/java/CalcTest.java:[8,9] cannot find symbol\n";
+        assert_eq!(
+            TestFramework::Java.classify(stdout, "", Some(1)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// Surefire reports `Errors:` separately from `Failures:`, and an error is
+    /// also a failing test run.
+    #[test]
+    fn surefire_errors_count_as_a_test_failure() {
+        let stdout = "[ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0\n";
+        assert_eq!(
+            TestFramework::Java.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn java_names_parse() {
+        for name in ["java", "junit", "maven", "mvn", "gradle"] {
+            assert_eq!(
+                TestFramework::parse(name),
+                Some(TestFramework::Java),
+                "{name} should name the Java framework"
+            );
+        }
+        assert_eq!(TestFramework::Java.as_str(), "java");
     }
 }

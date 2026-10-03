@@ -5,6 +5,8 @@ pub mod goanalysis;
 pub mod goscript;
 pub mod inline;
 pub mod integrity;
+pub mod javaanalysis;
+pub mod javasummary;
 pub mod model;
 pub mod mutation;
 pub mod mutation_runner;

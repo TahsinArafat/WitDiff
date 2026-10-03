@@ -21,3 +21,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
   implemented)
 - ADR-0016: Python integrity analysis uses the interpreter's own AST
 - ADR-0017: Go integrity analysis uses `go/ast`, behind a shared rule engine
+- ADR-0018: Java integrity analysis uses the JDK's parser, swapping JUnit's
+  argument order at the boundary

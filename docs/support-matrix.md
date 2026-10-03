@@ -16,17 +16,16 @@ Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
 
 ## Matrix
 
-| | Rust | Python (pytest) | Go | JS/TS (Jest, Vitest) |
-| --- | --- | --- | --- | --- |
-| **Red/green proof** | yes | yes | yes | yes |
-| Failure classification | yes | yes | yes | yes |
-| Compile-error vs test-failure | yes | yes | yes | yes |
-| **Integrity findings (structural)** | yes | yes | **yes** | no |
-| **Integrity findings (line-based)** | yes | no | no | no |
-| Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a |
-| **Mutation analysis** | yes | no | no | no |
-| Targeted test selection | yes | no | no | no |
-| `init` project detection | yes | yes | yes | yes |
+| | Rust | Python | Go | Java | JS/TS |
+| --- | --- | --- | --- | --- | --- |
+| **Red/green proof** | yes | yes | yes | yes | yes |
+| Failure classification | yes | yes | yes | yes | yes |
+| Compile-error vs test-failure | yes | yes | yes | yes | yes |
+| **Integrity findings (structural)** | yes | yes | yes | **yes** | no |
+| Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a | n/a |
+| **Mutation analysis** | yes | no | no | no | no |
+| Targeted test selection | yes | no | no | no | no |
+| `init` project detection | yes | yes | yes | yes | yes |
 
 "n/a" means the concept does not apply: inline test modules are a Rust idiom.
 Python, Go and JavaScript keep tests in separate files, which the whole-file
@@ -114,6 +113,32 @@ guard was deleted so it asserts nothing), `weakened_assertion`,
 added, so a pre-existing skip does not flood every receipt that touches the
 file.
 
+## Java structural analysis (ADR-0018)
+
+Java test files are analyzed with the JDK's own parser (`com.sun.source` via
+`JavacTask`), run through `java` over an embedded tool. Only the public API is
+used, so no `--add-exports` flag and no internal `com.sun.tools.javac` package
+is needed, and it works on any JDK.
+
+**JUnit reverses the argument order**, which is the detail that would silently
+break everything. `assertEquals(expected, actual)` puts the expectation first,
+unlike Python's `assert actual == expected` and Go's `if actual != want`. The
+tool swaps them so the shared engine compares like with like. Verified end to
+end: `assertEquals(2, Add(1, 1))` is normalized to `Add(1, 1) Eq 2`, and the
+analyzer reports `changed_expected_value` for it exactly as Python does.
+
+Detected: `removed_assertion`, `weakened_assertion`, `changed_expected_value`,
+`trivial_assertion`, `removed_test`, `skipped_test`.
+
+Recognized forms: `assertEquals`/`assertNotEquals`/`assertSame`/`assertNotSame`
+(with the swap), `assertTrue`/`assertFalse`, `assertNull`/`assertNotNull`,
+`assertArrayEquals`, and the bare `if (cond) fail(...)` shape. `@Disabled` and
+`@Ignore` are the skip markers, reported only when newly added.
+
+Requirements: a **JDK**, not a bare JRE, because the analysis compiles the tool
+in memory. A JRE-only environment is reported explicitly rather than mistaken
+for a syntax error.
+
 ## Still not detected: JavaScript
 
 For JavaScript and TypeScript, WitDiff produces **no integrity findings in
@@ -141,16 +166,16 @@ than guessed.
 
 | Language | Parser available without extra install? | What it would take |
 | --- | --- | --- |
+| **Ruby** | Yes — `ripper` ships in the standard library | Feasible, mirroring Go. Minitest and RSpec assertions differ in shape, so each needs its own vocabulary |
 | **TypeScript** | No — needs `typescript` in `node_modules` | Same problem as JavaScript. A TS project using Vitest does have `typescript` installed, so this is more tractable than plain JS |
 | **PHP** | Partially — `token_get_all` always ships; `ext-ast` does not | The tokenizer gives tokens, not a tree. Enough for line-based rules, not for the structural comparison the other languages get |
-| **Java** | Yes — `jdk.compiler` exposes `JavacTask` AST from the JDK | Feasible, mirroring Go: a small Java program run through the JDK that is already required to compile the project |
-| **.NET / C#** | Yes — Roslyn ships with the SDK | Feasible in principle, but Roslyn is a large API and the analysis would likely need a helper project rather than a single script |
-| **Ruby** | Yes — `ripper` ships in the standard library | Feasible, mirroring Go. Minitest and RSpec assertions differ in shape |
+| **.NET / C#** | Yes — Roslyn ships with the SDK | Feasible in principle, but Roslyn is a large API and the analysis would likely need a helper project rather than a single portable source file |
 | **ASP / ASP.NET** | n/a | A framework, not a test language. ASP.NET tests are xUnit/NUnit/MSTest, which are C# and covered by the .NET row |
 
-The two cheapest additions on this evidence are **Java** and **Ruby**, because
-both ship a parser with the runtime that is already required to run the tests —
-the same property that made Python and Go tractable at zero dependency cost.
+**Ruby is now the cheapest remaining addition**, because it has the same
+property that made Python, Go and Java tractable: the parser ships with the
+runtime that already has to be present to run the tests, so the analysis costs
+no dependency and no extra install step.
 
 ### The line-based fallback
 

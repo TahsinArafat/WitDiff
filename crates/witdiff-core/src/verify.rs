@@ -624,6 +624,12 @@ fn collect_integrity(
         &config.verification.test_command,
         repo.root(),
     );
+    // Java too (ADR-0018). The JDK ships a parser, so a project that can
+    // compile its tests can analyze them.
+    let java_toolchain = crate::javaanalysis::JavaToolchain::from_test_command(
+        &config.verification.test_command,
+        repo.root(),
+    );
     for path in &inspect.changed_test_files {
         let tracked = inspect
             .changed_files
@@ -631,6 +637,43 @@ fn collect_integrity(
             .find(|file| file.path == *path)
             .map(|file| file.tracked)
             .unwrap_or(true);
+
+        // Java test files get structural analysis (ADR-0018). JUnit declares
+        // assertEquals(expected, actual), so the summary tool swaps the
+        // arguments to match the subject-first form the shared engine uses.
+        if path.ends_with(".java") {
+            if let Some(toolchain) = &java_toolchain {
+                let head_path = repo.root().join(path);
+                let base_source = if tracked {
+                    repo.show_file_at(base, path)?
+                } else {
+                    None
+                };
+                findings.extend(crate::javaanalysis::analyze_java_test_change(
+                    path,
+                    toolchain,
+                    &head_path,
+                    base_source.as_deref(),
+                ));
+                continue;
+            }
+            let from_configured = config
+                .verification
+                .test_command
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "(none)".to_owned());
+            findings.push(IntegrityFinding {
+                severity: Severity::Info,
+                path: path.clone(),
+                line: "0".into(),
+                rule: "test_source_unparsable".into(),
+                message: format!(
+                    "this Java test file was not analyzed structurally, because a Java toolchain could not be determined from the configured test command (`{from_configured}`). The red/green proof is unaffected; test-weakening findings are not available for this file."
+                ),
+            });
+            continue;
+        }
 
         // Go test files get structural analysis (ADR-0017). Go has no
         // assertion keyword, so the analyzer compares the condition guarding
