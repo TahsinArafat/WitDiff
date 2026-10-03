@@ -17,3 +17,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0012: failure classification is framework-specific and explicitly selected
 - ADR-0013: CI gating distinguishes "nothing to prove" from "proof failed"
 - ADR-0014: the MCP server is a hand-written stdio adapter, not an SDK client
+- ADR-0015: a signed receipt can attest a run, not a revision (proposed; not
+  implemented)

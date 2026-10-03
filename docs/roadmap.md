@@ -83,14 +83,19 @@ and mutation, which remain Rust-only.
 - [x] PR annotations/check summary (`--github-annotations`; see ADR-0013)
 - [x] universal agent skill/instruction package (`examples/agent-instruction.txt`)
 - [x] MCP server wrapping core methods (`crates/witdiff-mcp`, ADR-0014)
-- [ ] signed/attested receipts
+- [ ] signed/attested receipts — design complete in ADR-0015; two prerequisites
+  (a content digest and a revision binding) must land first
 
 CI gating treats "nothing to prove" as distinct from "the proof failed", so a
 documentation-only pull request no longer fails the check. The policy lives in
 the CLI rather than the workflow file, so CI, MCP and local scripts agree.
 
-Signed receipts remain undesigned: PG-503 requires an ADR identifying what is
-signed, the key management assumptions and replay semantics before any code.
+Signed receipts are designed but not implemented (ADR-0015). The design found
+that a signature over the receipt as currently shaped would attest that a run
+happened, not which code was verified: on a clean tree the workspace fingerprint
+is exactly SHA-256 of the empty string, so it distinguishes nothing. A content
+digest over the verified inputs and a checkable revision binding must land
+first; key management and the goal of the attestation are still open.
 
 ## M6 — advanced evidence
 

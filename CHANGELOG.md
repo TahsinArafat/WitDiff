@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Documentation
+
+- **ADR-0015 designs signed receipts and declines to implement them yet.** The
+  design work found that a signature over the receipt as currently shaped would
+  attest that a run happened, not which code was verified. On a clean tree the
+  workspace fingerprint is exactly SHA-256 of the empty string, so two
+  repositories containing entirely different source produce the same
+  fingerprint; it is a staleness check, not a content hash. A content digest
+  over the verified inputs and a checkable revision binding are prerequisites.
+  Findings recorded: a receipt is trivially forgeable, the fingerprint does not
+  identify the verified code, and nothing detects a receipt that has gone stale
+  against the working tree.
+
 ### Added
 
 - **MCP server** (`crates/witdiff-mcp`, ADR-0014) exposing `witdiff_inspect`,

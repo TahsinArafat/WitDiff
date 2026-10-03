@@ -76,7 +76,10 @@ Read `docs/roadmap.md`. High-value tasks currently are:
 2. removed-error-check detection in the structural analyzer;
 3. the remaining mutation operators (condition negation, numeric return substitution);
 4. targeted invocation and structural integrity analysis for the non-Rust adapters (ADR-0012);
-5. signed receipts, which PG-503 requires be designed before implementation.
+5. the signed-receipt prerequisites in ADR-0015: a content digest over the
+   verified inputs, then a checkable binding from receipt to revision. Key
+   management is an open question and must be settled before implementation;
+6. reporting a stale stored receipt (PG-504).
 
 Integration tests, syntax-aware integrity analysis including `match`-arm
 comparison, targeted test selection, inline `#[cfg(test)]` transplantation
