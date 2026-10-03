@@ -2,6 +2,8 @@
 
 This file is the authoritative entry point for coding agents working in this repository. Read it before editing code. Then read `docs/product.md`, `docs/architecture.md`, and `docs/verification-model.md`.
 
+For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis and mutation are Rust-only, and that the line-based fallback matches Rust syntax exclusively.
+
 ## Mission
 
 WitDiff is **deterministic verification infrastructure for AI-written code**. The product must independently establish evidence; it must not ask an LLM whether its own work is correct.

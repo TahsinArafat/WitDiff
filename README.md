@@ -2,7 +2,9 @@
 
 **Deterministic verification for AI-written code.**
 
-WitDiff is a Rust-native verification layer for coding agents and humans. It does not generate code and it does not decide whether code is correct by asking an LLM. Instead, it produces executable evidence that a change is actually supported by the tests that accompany it.
+WitDiff is a verification layer for coding agents and humans. It does not generate code and it does not decide whether code is correct by asking an LLM. Instead, it produces executable evidence that a change is actually supported by the tests that accompany it.
+
+The **red/green proof** works for Rust, Python (pytest), Go and JavaScript/TypeScript (Jest, Vitest). Structural test-integrity analysis and changed-code mutation are **Rust-only** today. See the [support matrix](docs/support-matrix.md) for exactly what is and is not covered per language, including the limitations, before adopting it for a non-Rust project.
 
 The v0.1 proof is intentionally narrow and useful:
 
