@@ -10,6 +10,7 @@ name = "witdiff"
 path = "src/main.rs"
 
 [dependencies]
+toml.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 witdiff-core = { path = "../witdiff-core" }

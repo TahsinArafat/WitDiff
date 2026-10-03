@@ -20,7 +20,20 @@ cd your-project
 witdiff init
 ```
 
-Edit `witdiff.toml` if your test command or dedicated test paths differ from the defaults.
+`init` detects the project type from its manifest and writes a matching
+configuration: `cargo test` for Rust, `python3 -m pytest` for Python, `go test
+./...` for Go, `npm test` for JavaScript. Edit `witdiff.toml` if the command or
+the dedicated test globs differ.
+
+Then check the setup before running anything:
+
+```bash
+witdiff doctor
+```
+
+`doctor` verifies that git is present, that the configured test binary exists,
+and that the configured `framework` is recognized. It exits 2 if anything is
+wrong, so it works as a preflight step in CI.
 
 ## Inspect classification
 
@@ -41,6 +54,26 @@ For an agent or CI gate:
 ```bash
 witdiff verify --base origin/main --strict --json
 ```
+
+Exit codes are three-way, not two: `0` the claim was proven or there was nothing
+to prove, `1` WitDiff itself failed to run, `2` verification did not pass. Exit
+2 is a failed gate, not a crash to retry.
+
+Output ends with a `next` line giving the action for the resulting status. Every
+status and its meaning:
+
+| status | meaning |
+| --- | --- |
+| `verified` | the changed tests fail on the base revision and pass here |
+| `verified_with_warnings` | proven, with integrity findings to read |
+| `no_changed_tests` | no dedicated test changed, so no proof was attempted; not a failure |
+| `not_verified` | a proof was attempted and did not establish the claim |
+| `head_failed` | the test command fails on the current workspace |
+| `base_incompatible` | the transplanted test does not compile against the base revision |
+
+The most common `not_verified` cause is a test that also passes on the base
+revision, which means it does not pin the new behavior. Add an assertion that
+fails without the change.
 
 ## Read the last receipt
 

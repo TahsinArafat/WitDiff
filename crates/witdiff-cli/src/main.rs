@@ -144,9 +144,21 @@ fn init(start: &Path, force: bool) -> Result<ExitCode> {
             path.display()
         );
     }
-    fs::write(&path, Config::render_default()?)
+    // Infer the project type rather than always writing Rust defaults: in a
+    // Python or Go repository those would make the first verification attempt
+    // to run `cargo test` with no Cargo.toml.
+    let config = Config::inferred_for(repo.root());
+    fs::write(&path, toml::to_string_pretty(&config)?)
         .with_context(|| format!("failed writing {}", path.display()))?;
     println!("created {}", path.display());
+    println!("  language   : {}", config.project.language);
+    println!("  framework  : {}", config.verification.framework);
+    println!(
+        "  test cmd   : {}",
+        config.verification.test_command.join(" ")
+    );
+    println!();
+    println!("Edit the file if the command or test globs are wrong, then run `witdiff doctor`.");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -154,19 +166,24 @@ fn doctor(start: &Path) -> Result<ExitCode> {
     let repo = GitRepo::discover(start)?;
     let config = Config::load(repo.root())?;
     let git_ok = command_exists("git", &["--version"]);
-    let cargo_ok = command_exists("cargo", &["--version"]);
-    let command_ok = config
-        .verification
-        .test_command
-        .first()
+
+    // Check the binary this project actually uses, not `cargo`. A Python or Go
+    // repository has no reason to have cargo installed, and reporting it as a
+    // failure would be wrong.
+    let program = config.verification.test_command.first().cloned();
+    let command_ok = program
+        .as_deref()
         .map(|program| command_exists(program, &["--version"]))
         .unwrap_or(false);
+
+    // Validate the framework name here rather than letting it surface at
+    // verify time. A preflight check that reports "ok" for a config that
+    // cannot run is not doing its job (ADR-0012).
+    let framework = config.verification.framework();
 
     println!("WitDiff doctor");
     println!("  repository : {}", repo.root().display());
     println!("  git        : {}", mark(git_ok));
-    println!("  cargo      : {}", mark(cargo_ok));
-    println!("  test cmd   : {}", mark(command_ok));
     println!(
         "  config     : {}",
         if repo.root().join("witdiff.toml").exists() {
@@ -175,12 +192,28 @@ fn doctor(start: &Path) -> Result<ExitCode> {
             "using defaults"
         }
     );
-
-    if git_ok && command_ok {
-        Ok(ExitCode::SUCCESS)
-    } else {
-        Ok(ExitCode::from(2))
+    println!(
+        "  test cmd   : {} {}",
+        mark(command_ok),
+        program.as_deref().unwrap_or("(none configured)")
+    );
+    match &framework {
+        Ok(framework) => println!("  framework  : ok ({})", framework.as_str()),
+        Err(error) => println!("  framework  : failed ({error})"),
     }
+
+    let ok = git_ok && command_ok && framework.is_ok();
+    if !ok {
+        println!();
+        println!(
+            "  next       : fix the entries marked failed above, then re-run `witdiff doctor`."
+        );
+    }
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    })
 }
 
 fn inspect(start: &Path, base: Option<&str>, json: bool) -> Result<ExitCode> {
@@ -501,6 +534,9 @@ fn print_receipt_summary(receipt: &Receipt) {
     for note in &receipt.notes {
         println!("  note             : {note}");
     }
+    // Printed last and prefixed so it is not mistaken for a finding: the
+    // diagnosis above says what happened, this says what to do about it.
+    println!("  next             : {}", receipt.status.remediation());
 }
 
 fn pass_fail(success: bool) -> &'static str {

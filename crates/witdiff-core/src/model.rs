@@ -201,6 +201,46 @@ impl VerificationStatus {
         }
     }
 
+    /// What the reader should do about this status.
+    ///
+    /// A diagnosis without a next step is what makes a verification tool get
+    /// ignored. Every non-verified status gets a concrete action, and the
+    /// verified ones say so plainly rather than inventing work.
+    pub fn remediation(&self) -> &'static str {
+        match self {
+            Self::Verified => {
+                "Nothing to do: the changed tests fail on the base revision and pass here."
+            }
+            Self::VerifiedWithWarnings => {
+                "Read the integrity findings above. Each named rule describes something the change did to the tests."
+            }
+            Self::NotVerified => {
+                "The tests do not yet prove this change. Usual causes: the test passes on the base revision too, so it does not pin the new behavior (add an assertion that fails without the change); or the base revision itself does not pass, so no failure can be attributed to the test."
+            }
+            Self::NoChangedTests => {
+                "No dedicated test file changed, so no proof was attempted. This is not a failure. If the change should be covered, add or update a test; if it is a refactor or documentation change, nothing is needed."
+            }
+            Self::HeadFailed => {
+                "The test command fails on the current workspace. Fix that first: WitDiff cannot attribute a base failure to a test that is already failing here."
+            }
+            Self::BaseIncompatible => {
+                "The transplanted test does not compile against the base revision, so no behavioral proof is possible. Usually the test references an API this change adds. Split the change: land the production change first, then the test."
+            }
+        }
+    }
+
+    /// Whether this status indicates the change is fine but unproven, as
+    /// opposed to something being wrong.
+    ///
+    /// Used to choose whether output should read as a failure. `not_verified`
+    /// and `head_failed` are problems; `no_changed_tests` is not.
+    pub fn is_problem(&self) -> bool {
+        matches!(
+            self,
+            Self::NotVerified | Self::HeadFailed | Self::BaseIncompatible
+        )
+    }
+
     /// Stable machine-facing token. This must always agree with the value
     /// serialized into `witdiff.receipt.v1`; the schema enum is generated from
     /// the same set of names. Never print the Rust `Debug` representation of
@@ -638,5 +678,63 @@ mod gate_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod remediation_tests {
+    use super::*;
+
+    /// Every status must tell the reader what to do. A diagnosis without a next
+    /// step is what makes a verification tool get ignored.
+    #[test]
+    fn every_status_explains_the_next_step() {
+        let statuses = [
+            VerificationStatus::Verified,
+            VerificationStatus::VerifiedWithWarnings,
+            VerificationStatus::NotVerified,
+            VerificationStatus::NoChangedTests,
+            VerificationStatus::HeadFailed,
+            VerificationStatus::BaseIncompatible,
+        ];
+        for status in statuses {
+            let text = status.remediation();
+            assert!(
+                text.len() > 40,
+                "{:?} needs a concrete recommendation, got {text:?}",
+                status
+            );
+            assert!(
+                text.ends_with('.'),
+                "{:?} should read as a sentence, got {text:?}",
+                status
+            );
+        }
+    }
+
+    /// The one that matters most in practice: the single most common
+    /// AI-authored failure is a test that passes on the base revision too.
+    #[test]
+    fn not_verified_explains_the_most_common_cause() {
+        let text = VerificationStatus::NotVerified.remediation();
+        assert!(
+            text.contains("passes on the base revision"),
+            "the most common cause must be named, got {text:?}"
+        );
+        assert!(
+            text.to_lowercase().contains("add an assertion"),
+            "the reader needs a concrete action, got {text:?}"
+        );
+    }
+
+    /// "Nothing to do" and "something is wrong" must be distinguishable, or
+    /// output cannot be styled honestly.
+    #[test]
+    fn problems_are_distinguished_from_non_problems() {
+        assert!(!VerificationStatus::Verified.is_problem());
+        assert!(!VerificationStatus::NoChangedTests.is_problem());
+        assert!(VerificationStatus::NotVerified.is_problem());
+        assert!(VerificationStatus::HeadFailed.is_problem());
+        assert!(VerificationStatus::BaseIncompatible.is_problem());
     }
 }

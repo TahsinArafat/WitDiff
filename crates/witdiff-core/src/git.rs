@@ -5,6 +5,7 @@
 //! lifetime.
 
 use std::{
+    collections::BTreeMap,
     collections::HashSet,
     fs,
     io::Write,
@@ -462,7 +463,55 @@ impl GitRepo {
         Ok(parse_changed_head_lines(&diff))
     }
 
-    /// Read a repository-relative path from the working tree.
+    /// A snapshot of every path the workspace fingerprint hashes, with its
+    /// content hash.
+    ///
+    /// Taken before and after a verification run so a staleness report can name
+    /// what changed rather than only that something did. Comparing two
+    /// fingerprints tells you they differ; this tells you why.
+    pub fn fingerprint_inputs(&self, base: &str) -> Result<BTreeMap<String, String>> {
+        let mut snapshot = BTreeMap::new();
+        for path in self.changed_paths(base)? {
+            let digest = match fs::read(self.root.join(&path)) {
+                Ok(bytes) => hex::encode(Sha256::digest(&bytes))[..16].to_owned(),
+                // A deleted path is a change in itself; record it as absent
+                // rather than omitting it, so the diff can report the deletion.
+                Err(_) => "<absent>".to_owned(),
+            };
+            snapshot.insert(path, digest);
+        }
+        Ok(snapshot)
+    }
+
+    /// Every path that differs from the base revision, tracked or not.
+    fn changed_paths(&self, base: &str) -> Result<Vec<String>> {
+        let mut paths: Vec<String> = Vec::new();
+
+        let status = self.git_text(["status", "--porcelain=v1", "-z"])?;
+        let mut records = NulRecords::new(status.as_bytes());
+        while let Some(field) = records.next_field() {
+            let text = field.text;
+            // A status record is `XY <path>`; a rename adds a second record
+            // holding the original path, which is also a change.
+            if text.len() > 3 && text.as_bytes()[2] == b' ' {
+                paths.push(text[3..].to_owned());
+            } else if !text.is_empty() {
+                paths.push(text);
+            }
+        }
+
+        let untracked = self.git_text(["ls-files", "--others", "--exclude-standard"])?;
+        for line in untracked.lines().filter(|line| !line.trim().is_empty()) {
+            paths.push(line.to_owned());
+        }
+
+        let _ = base;
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    /// Read a repository-relative path from the working tree.    /// Read a repository-relative path from the working tree.
     ///
     /// Returns `None` when the path is absent or is not valid UTF-8, because a
     /// source file that cannot be decoded as text cannot be parsed or spliced.

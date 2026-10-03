@@ -103,6 +103,7 @@ pub fn verify_repository(
     let effective_test_command = Some(command.as_vec());
 
     let before = repo.workspace_fingerprint(&base)?;
+    let inputs_before = repo.fingerprint_inputs(&base)?;
     let integrity_findings = collect_integrity(repo, &base, &inspect)?;
 
     let timeout = config.verification.timeout_secs.map(Duration::from_secs);
@@ -386,7 +387,49 @@ pub fn verify_repository(
     let after = repo.workspace_fingerprint(&base)?;
     let evidence_fresh = before == after;
     if !evidence_fresh {
-        notes.push("workspace changed while verification was running; evidence is stale".into());
+        // Name what moved, but summarize: a first build can touch hundreds of
+        // paths under `target/`, and dumping them buries the one that matters.
+        // A bare "something changed" is unhelpful; an exhaustive list is
+        // unusable. The signal is the handful of source-level paths, so build
+        // output is grouped and counted rather than enumerated.
+        let inputs_after = repo.fingerprint_inputs(&base)?;
+        let mut moved: Vec<&str> = Vec::new();
+        for (path, digest) in &inputs_after {
+            match inputs_before.get(path) {
+                Some(previous) if previous == digest => {}
+                _ => moved.push(path),
+            }
+        }
+        for path in inputs_before.keys() {
+            if !inputs_after.contains_key(path) {
+                moved.push(path);
+            }
+        }
+        moved.sort_unstable();
+        moved.dedup();
+
+        let (build_output, source_paths): (Vec<&str>, Vec<&str>) =
+            moved.iter().partition(|path| is_build_output(path));
+
+        let mut detail = Vec::new();
+        if !source_paths.is_empty() {
+            detail.push(format!("changed: {}", source_paths.join(", ")));
+        }
+        if !build_output.is_empty() {
+            detail.push(format!(
+                "{} build-output path(s) also appeared, which do not affect the verification",
+                build_output.len()
+            ));
+        }
+        if detail.is_empty() {
+            detail
+                .push("the changed content could not be attributed to a specific path".to_owned());
+        }
+
+        notes.push(format!(
+            "workspace changed while verification was running, so the evidence is stale ({}). If a tracked file changed, commit it and re-run. Build output should be listed in .gitignore.",
+            detail.join("; ")
+        ));
         if status.is_verified() {
             status = VerificationStatus::NotVerified;
         }
@@ -416,6 +459,29 @@ pub fn verify_repository(
         refused_inline_tests,
         mutation,
     })
+}
+
+/// Whether a path is build output rather than source.
+///
+/// Used to keep a staleness report readable. A first build can create hundreds
+/// of files under a target directory, and enumerating them buries the one or
+/// two source paths that actually matter.
+fn is_build_output(path: &str) -> bool {
+    const BUILD_DIRS: [&str; 8] = [
+        "target/",
+        "node_modules/",
+        ".venv/",
+        "venv/",
+        "__pycache__/",
+        "build/",
+        "dist/",
+        ".mypy_cache/",
+    ];
+    let lower = path.to_ascii_lowercase();
+    BUILD_DIRS
+        .iter()
+        .any(|dir| lower.starts_with(dir) || lower.contains(&format!("/{dir}")))
+        || lower.ends_with(".pyc")
 }
 
 /// Everything the base experiment produced that the receipt needs.
@@ -610,4 +676,47 @@ pub fn write_receipt(
     let bytes = serde_json::to_vec_pretty(receipt).context("failed serializing receipt")?;
     fs::write(&path, bytes).with_context(|| format!("failed writing {}", path.display()))?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod staleness_tests {
+    use super::is_build_output;
+
+    /// Build output must be grouped rather than enumerated: a first build can
+    /// touch hundreds of paths, and listing them buries the source change that
+    /// actually made the evidence stale.
+    #[test]
+    fn build_output_is_recognized() {
+        for path in [
+            "target/debug/deps/libfoo.rlib",
+            "crates/x/target/debug/foo",
+            "node_modules/left-pad/index.js",
+            ".venv/lib/python3.11/site-packages/x.py",
+            "src/__pycache__/mod.cpython-311.pyc",
+            "dist/bundle.js",
+            "src/thing.pyc",
+        ] {
+            assert!(is_build_output(path), "{path} should count as build output");
+        }
+    }
+
+    /// The dangerous direction: a source file must never be mistaken for build
+    /// output, or a real change would be collapsed into a count and hidden.
+    #[test]
+    fn source_files_are_not_build_output() {
+        for path in [
+            "src/lib.rs",
+            "tests/add.rs",
+            "Cargo.lock",
+            "Cargo.toml",
+            "generated.txt",
+            "src/targeting.rs",
+            "package.json",
+        ] {
+            assert!(
+                !is_build_output(path),
+                "{path} must be reported as a source-level change, not collapsed"
+            );
+        }
+    }
 }

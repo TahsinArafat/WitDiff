@@ -159,6 +159,80 @@ impl Config {
         toml::to_string_pretty(&Self::default()).context("failed to serialize default config")
     }
 
+    /// A starting configuration inferred from the files in a repository.
+    ///
+    /// `init` writes Rust defaults unconditionally otherwise, which is actively
+    /// misleading in a Python or Go repository: the developer's first
+    /// verification would run `cargo test` in a project that has no Cargo.toml.
+    ///
+    /// Detection is by the presence of a manifest or a conventional test file.
+    /// It is a starting point for the developer to edit, not a heuristic that
+    /// runs at verification time, so being wrong is cheap and visible.
+    pub fn inferred_for(root: &Path) -> Self {
+        let mut config = Self::default();
+
+        let exists = |name: &str| root.join(name).exists();
+        let any_exists = |names: &[&str]| names.iter().any(|name| exists(name));
+
+        if any_exists(&["Cargo.toml"]) {
+            // The default already describes a Rust project.
+            return config;
+        }
+
+        if any_exists(&[
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "requirements.txt",
+            "tox.ini",
+        ]) {
+            config.project.language = "python".into();
+            config.verification.framework = "pytest".into();
+            config.verification.test_command = vec!["python3".into(), "-m".into(), "pytest".into()];
+            config.verification.test_globs = vec![
+                "tests/*.py".into(),
+                "tests/**/*.py".into(),
+                "test_*.py".into(),
+                "**/test_*.py".into(),
+                "*_test.py".into(),
+                "**/*_test.py".into(),
+            ];
+            config.verification.extra_test_paths = vec!["tests".into()];
+            return config;
+        }
+
+        if any_exists(&["go.mod"]) {
+            config.project.language = "go".into();
+            config.verification.framework = "go".into();
+            config.verification.test_command = vec!["go".into(), "test".into(), "./...".into()];
+            config.verification.test_globs = vec!["*_test.go".into(), "**/*_test.go".into()];
+            return config;
+        }
+
+        if any_exists(&["package.json"]) {
+            config.project.language = "javascript".into();
+            config.verification.framework = "javascript".into();
+            // `npm test` is the conventional entry point and defers to whatever
+            // the project configured, which is more likely correct than naming
+            // a runner directly.
+            config.verification.test_command = vec!["npm".into(), "test".into()];
+            config.verification.test_globs = vec![
+                "**/*.test.ts".into(),
+                "**/*.test.js".into(),
+                "**/*.spec.ts".into(),
+                "**/*.spec.js".into(),
+                "tests/**/*.ts".into(),
+                "tests/**/*.js".into(),
+            ];
+            config.verification.extra_test_paths = vec!["tests".into(), "__tests__".into()];
+            return config;
+        }
+
+        // Nothing recognized: keep the Rust defaults, which is also what a
+        // greenfield project is most likely to want from this tool today.
+        config
+    }
+
     pub fn test_matcher(&self) -> Result<TestMatcher> {
         TestMatcher::new(
             &self.verification.test_globs,
@@ -249,5 +323,109 @@ mod tests {
         assert!(matcher.is_test_path("crates/api/tests/login.rs"));
         assert!(matcher.is_test_path("src/parser_test.rs"));
         assert!(!matcher.is_test_path("src/parser.rs"));
+    }
+}
+
+#[cfg(test)]
+mod inference_tests {
+    use super::*;
+
+    fn infer(files: &[&str]) -> Config {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        for name in files {
+            std::fs::write(dir.path().join(name), "").expect("write marker");
+        }
+        Config::inferred_for(dir.path())
+    }
+
+    /// Writing Rust defaults into a Python repository would make the first
+    /// verification run `cargo test` in a project with no Cargo.toml.
+    #[test]
+    fn python_projects_get_pytest() {
+        let config = infer(&["pyproject.toml"]);
+        assert_eq!(config.project.language, "python");
+        assert_eq!(config.verification.framework, "pytest");
+        assert_eq!(config.verification.test_command[0], "python3");
+        assert!(
+            config
+                .verification
+                .test_globs
+                .iter()
+                .any(|g| g.contains("test_")),
+            "pytest's conventional naming should be covered: {:?}",
+            config.verification.test_globs
+        );
+    }
+
+    #[test]
+    fn go_projects_get_go_test() {
+        let config = infer(&["go.mod"]);
+        assert_eq!(config.project.language, "go");
+        assert_eq!(config.verification.framework, "go");
+        assert_eq!(
+            config.verification.test_command,
+            vec!["go", "test", "./..."]
+        );
+        assert!(config
+            .verification
+            .test_globs
+            .iter()
+            .any(|g| g.contains("_test.go")));
+    }
+
+    #[test]
+    fn javascript_projects_get_npm_test() {
+        let config = infer(&["package.json"]);
+        assert_eq!(config.project.language, "javascript");
+        assert_eq!(config.verification.framework, "javascript");
+        assert_eq!(config.verification.test_command, vec!["npm", "test"]);
+    }
+
+    /// Rust stays the default, and a Rust repository must not be misdetected.
+    #[test]
+    fn cargo_projects_keep_the_rust_defaults() {
+        let config = infer(&["Cargo.toml"]);
+        assert_eq!(config.project.language, "rust");
+        assert_eq!(config.verification.test_command[0], "cargo");
+    }
+
+    /// A repository with no recognizable manifest gets the defaults, which is
+    /// what `init` has always done.
+    #[test]
+    fn an_unrecognized_project_falls_back_to_defaults() {
+        let default = Config::default();
+        let inferred = infer(&["README.md"]);
+        assert_eq!(inferred.project.language, default.project.language);
+        assert_eq!(
+            inferred.verification.test_command,
+            default.verification.test_command
+        );
+    }
+
+    /// Every inferred configuration must be usable as-is, or `init` would
+    /// hand the developer something that fails immediately.
+    #[test]
+    fn every_inferred_configuration_is_valid() {
+        for markers in [
+            vec!["Cargo.toml"],
+            vec!["pyproject.toml"],
+            vec!["go.mod"],
+            vec!["package.json"],
+            vec!["README.md"],
+        ] {
+            let config = infer(&markers);
+            assert!(
+                config.verification.framework().is_ok(),
+                "{markers:?} produced an unparseable framework"
+            );
+            assert!(
+                !config.verification.test_command.is_empty(),
+                "{markers:?} produced no test command"
+            );
+            assert!(
+                config.test_matcher().is_ok(),
+                "{markers:?} produced invalid test globs"
+            );
+        }
     }
 }
