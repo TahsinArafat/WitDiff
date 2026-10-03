@@ -846,3 +846,153 @@ fn hung_test_command_is_bounded_and_never_verified() {
     );
     assert!(encoded.contains("\"timed_out\":true"));
 }
+
+// ---------------------------------------------------------------------------
+// M1 hardening: transplant must stay test-only
+// ---------------------------------------------------------------------------
+
+/// Renaming production code into `tests/` must not smuggle the production diff
+/// into a "test-only" transplant.
+///
+/// If the old production path were included in the transplant pathspec, the
+/// base worktree would receive the production change too, the failure on base
+/// would no longer be attributable to the test, and WitDiff would report a
+/// proof it never performed.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn rename_from_production_into_tests_does_not_smuggle_production_code() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", buggy_lib()),
+        // A production helper module that the library does not import. Moving
+        // it into `tests/` makes its new path match the `tests/*.rs` glob while
+        // leaving the crate buildable, which is exactly the shape that could
+        // smuggle a production diff into a test-only transplant.
+        ("src/helper.rs", "pub fn offset() -> i32 {\n    0\n}\n"),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+
+    fixture.write("src/lib.rs", fixed_lib());
+    git(&fixture.root, &["mv", "src/helper.rs", "tests/helper.rs"]);
+
+    let mut config = fixture_config();
+    config.verification.targeted_test_selection = false;
+
+    let receipt = verify_repository(&fixture.repo(), &config, VerifyOptions::default())
+        .expect("verification should complete");
+
+    let moved = receipt
+        .changed_files
+        .iter()
+        .find(|file| file.path == "tests/helper.rs")
+        .expect("the renamed file should be reported");
+    assert!(
+        !moved.previous_is_test,
+        "a rename sourced from src/ must not be treated as test-to-test"
+    );
+
+    assert!(
+        receipt
+            .notes
+            .iter()
+            .any(|note| note.contains("tests/helper.rs") && note.contains("not transplanted")),
+        "the receipt must explain that the file was excluded, got {:?}",
+        receipt.notes
+    );
+
+    // Excluding a changed test means the red/green proof is partial, so it can
+    // never be reported as complete.
+    assert!(
+        !matches!(
+            receipt.status,
+            VerificationStatus::Verified | VerificationStatus::VerifiedWithWarnings
+        ),
+        "a partial transplant must not yield a verified status, got {:?}",
+        receipt.status
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M2: syntax-aware integrity analysis
+// ---------------------------------------------------------------------------
+
+/// An assertion that is merely reformatted must not be reported as removed.
+///
+/// This is the case the line-oriented analyzer could not handle: every line of
+/// the assertion changes in the diff, but the assertion itself is unchanged.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn reformatting_a_test_is_not_an_integrity_finding() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        (
+            "tests/existing.rs",
+            "#[test]\nfn even_numbers_are_reported_even() {\n    assert_eq!(witdiff_fixture::is_even(2), true);\n}\n",
+        ),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // Reformat the assertion across several lines without changing meaning.
+    fixture.write(
+        "tests/existing.rs",
+        "#[test]\nfn even_numbers_are_reported_even() {\n    assert_eq!(\n        witdiff_fixture::is_even(2),\n        true,\n    );\n}\n",
+    );
+
+    let receipt = fixture.verify(&fixture_config());
+
+    assert!(
+        !receipt
+            .integrity_findings
+            .iter()
+            .any(|finding| finding.rule == "removed_assertion"),
+        "reformatting must not register as a removed assertion, got {:?}",
+        receipt.integrity_findings
+    );
+}
+
+/// Changing only the expected value is detected through the syntax-aware path.
+///
+/// The subject expression stays identical, so the line-oriented analyzer sees
+/// one changed line with no signal about what changed. The structural analyzer
+/// can say precisely that the expectation moved from `true` to `false`.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn changed_expected_value_is_reported_against_a_real_repository() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        (
+            "tests/existing.rs",
+            "#[test]\nfn even_numbers_are_reported_even() {\n    assert_eq!(witdiff_fixture::is_even(2), true);\n}\n",
+        ),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // Invert the expectation. The test still passes, but it now asserts the
+    // opposite of what it checked before.
+    fixture.write(
+        "tests/existing.rs",
+        "#[test]\nfn even_numbers_are_reported_even() {\n    assert_eq!(witdiff_fixture::is_even(2), false);\n}\n",
+    );
+
+    let receipt = fixture.verify(&fixture_config());
+
+    let changed = receipt
+        .integrity_findings
+        .iter()
+        .find(|finding| finding.rule == "changed_expected_value")
+        .unwrap_or_else(|| {
+            panic!(
+                "a changed expected value must be reported, got {:?}",
+                receipt.integrity_findings
+            )
+        });
+    assert_eq!(changed.severity.as_str(), "high");
+    assert!(
+        changed.message.contains("true") && changed.message.contains("false"),
+        "the finding should name both expectations, got {}",
+        changed.message
+    );
+}

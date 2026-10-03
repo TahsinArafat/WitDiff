@@ -3,6 +3,8 @@ pub mod git;
 pub mod integrity;
 pub mod model;
 pub mod runner;
+pub mod rustanalysis;
+pub mod selection;
 pub mod verify;
 
 pub use config::Config;

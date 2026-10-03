@@ -31,18 +31,26 @@ The roadmap is organized around proof quality, not feature count.
 - [x] add Git inspection integration test using a temporary repository
 - [x] add full red/green end-to-end integration tests using a deterministic fixture runner
 - [x] ensure worktree cleanup also occurs if patch application or test execution fails
-- [ ] verify behavior with spaces/non-UTF8 paths where platforms permit
-- [ ] improve renamed/deleted test handling
+- [x] verify behavior with spaces/non-UTF8 paths where platforms permit
+- [x] improve renamed/deleted test handling
 - [x] add bounded execution timeout without risking stdout/stderr pipe deadlock
 - [x] normalize status display to stable kebab/snake strings instead of Rust debug output
 
 ## M2 — Rust-aware test analysis
 
-- [ ] parse Rust syntax instead of line heuristics
-- [ ] detect weakened comparisons, removed match arms, changed expected values
+- [x] parse Rust syntax instead of line heuristics
+- [x] detect weakened comparisons, removed match arms, changed expected values
+- [x] associate changed tests with test names
+- [x] run only changed tests where equivalence is safe
 - [ ] support inline `#[cfg(test)] mod tests` transplant safely
-- [ ] associate changed tests with test names
-- [ ] run only changed tests where equivalence is safe
+
+See ADR-0006 (structural analysis), ADR-0007 (test-only transplant boundary),
+ADR-0008 (targeted selection refuses rather than approximates), and ADR-0009
+(NUL-delimited Git paths).
+
+`removed match arms` remains open: it requires knowing which arms belonged to a
+match that the change also edited, which is a deeper analysis than the assertion
+comparison shipped in 1.0.
 
 ## M3 — changed-code mutation proof
 

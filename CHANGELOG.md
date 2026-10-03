@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.0.0
+
+First stable release. The red/green proof semantics are unchanged from 0.1; this
+release closes the two remaining M1 hardening gaps and implements M2 Rust-aware
+analysis. All receipt changes are **additive within `witdiff.receipt.v1`** — no
+v2, no breaking change, and receipts written by 0.1 still deserialize.
+
+### Added
+
+- **Syntax-aware test integrity analysis** (`crates/witdiff-core/src/rustanalysis.rs`,
+  ADR-0006). Rust test files are parsed with `syn` and compared structurally
+  between base and head, instead of scanning added and removed diff lines. New
+  rules: `removed_assertion`, `changed_expected_value`, `weakened_assertion`,
+  `removed_test`, plus informational `unignored_test` and `empty_test_body`.
+  Existing rules (`ignored_test`, `added_should_panic`, `trivial_assertion`) are
+  retained.
+- **`test_source_unparsable` finding.** A test file that cannot be parsed is
+  reported and falls back to the line-oriented rules. It is never silently
+  treated as clean.
+- **Targeted test selection** (`crates/witdiff-core/src/selection.rs`,
+  ADR-0008), opt-in via `verification.targeted_test_selection`, default
+  `false`. Narrows a cargo test command to the cargo targets of the changed
+  dedicated tests. It refuses to narrow, and runs the full suite with a note,
+  whenever doing so would change or misrepresent what actually runs — notably
+  when the command uses `--all-targets`, which overrides `--test` in cargo.
+- **Receipt fields**: `test_selection` (`full_suite` / `targeted`),
+  `effective_test_command`, and `changed_files[].path_is_lossy` /
+  `changed_files[].previous_is_test`. All additive and optional.
+- End-to-end coverage for reformatting-is-not-a-finding, changed expectations,
+  and the production-rename transplant boundary.
+- Unit coverage for NUL-delimited Git path decoding, including a non-UTF-8 path
+  decoded from raw bytes.
+
+### Fixed
+
+- **Non-ASCII paths were silently dropped from verification.** `git diff
+  --name-status` and `git ls-files --others` were read by splitting on newlines,
+  so Git C-quoted any non-ASCII path (`tests/café.rs` arrived as
+  `"tests/caf\303\251.rs"`). Such files matched no test glob and were
+  classified as production code, so they were never transplanted. Path output is
+  now read NUL-delimited with `-z` (ADR-0009). A filename containing a newline
+  is also now a single path rather than two.
+- **A rename from production code into a test directory could make the proof
+  prove the wrong thing.** The old production path was added to the transplant
+  pathspec, so the production file's diff rode along in a "test-only" transplant
+  and the base worktree could receive the fix. Such files are now excluded,
+  named in the receipt `notes`, and prevent a verified status (ADR-0007).
+- A path that could not be decoded as UTF-8 is no longer lossily decoded in
+  silence; the loss is recorded at decode time, where it is still recoverable,
+  and the path is not transplanted.
+
+### Known limitations
+
+- WitDiff does not resolve `let` bindings, so an assertion rewritten as
+  `assert_eq!(compute(), 4)` → `assert_eq!(v, 4)` is reported as a removal. The
+  analyzer cannot prove it merely moved, and reporting is the conservative
+  direction.
+- Inline `#[cfg(test)] mod tests` inside production files still cannot be
+  transplanted independently. WitDiff detects likely inline-test edits and
+  reports them as a note rather than claiming to have verified them.
+- Targeted selection is Rust/cargo only and defaults to off.
+
 ## 0.1.0 - initial release
 
 First release. WitDiff was developed under an earlier working name that was

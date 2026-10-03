@@ -56,7 +56,10 @@
       "type": "boolean"
     },
     "changed_files": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/changed_file"
+      }
     },
     "changed_test_files": {
       "type": "array",
@@ -98,9 +101,67 @@
           "type": "null"
         }
       ]
+    },
+    "test_selection": {
+      "$ref": "#/$defs/test_selection",
+      "description": "Which test command variant produced head_run and base_run. Defaults to full_suite, which is what receipts written before this field existed recorded."
+    },
+    "effective_test_command": {
+      "description": "The exact argument vector used for the proof runs, after any narrowing. Recorded so a consumer never has to infer what was executed.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
     }
   },
   "$defs": {
+    "test_selection": {
+      "type": "string",
+      "enum": [
+        "full_suite",
+        "targeted"
+      ]
+    },
+    "changed_file": {
+      "type": "object",
+      "required": [
+        "path",
+        "kind",
+        "is_test",
+        "tracked"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "previous_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "is_test": {
+          "type": "boolean"
+        },
+        "tracked": {
+          "type": "boolean"
+        },
+        "path_is_lossy": {
+          "type": "boolean",
+          "description": "True when the path could not be decoded as UTF-8 and was lossily replaced. Such a path is not transplanted, because the lossy text names a file that does not exist."
+        },
+        "previous_is_test": {
+          "type": "boolean",
+          "description": "For a rename or copy, whether the source path was itself a test. False means the source was production code and the file must not be transplanted as part of a test-only patch."
+        }
+      }
+    },
     "run": {
       "type": "object",
       "required": [

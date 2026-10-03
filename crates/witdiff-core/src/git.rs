@@ -106,6 +106,55 @@ pub struct GitRepo {
     root: PathBuf,
 }
 
+/// Iterator over NUL-delimited records from a `-z` Git plumbing command.
+///
+/// Git's `-z` output is a flat sequence of `field\0` records, not lines, so a
+/// path containing a newline, a quote, or a backslash is delivered verbatim.
+/// Records are decoded up front so each field is an owned `String`.
+///
+/// Non-UTF-8 paths cannot be represented exactly in a JSON receipt, so they are
+/// lossily decoded. The loss is recorded per field at decode time — it cannot
+/// be recovered afterwards, because the lossy form is itself valid UTF-8 — and
+/// surfaced as `ChangedFile::path_is_lossy`.
+struct NulRecords {
+    fields: std::vec::IntoIter<PathField>,
+}
+
+impl NulRecords {
+    fn new(bytes: &[u8]) -> Self {
+        let mut fields = Vec::new();
+        for raw in bytes.split(|byte| *byte == 0) {
+            if raw.is_empty() {
+                continue;
+            }
+            fields.push(match std::str::from_utf8(raw) {
+                Ok(text) => PathField {
+                    text: text.to_owned(),
+                    lossy: false,
+                },
+                Err(_) => PathField {
+                    text: String::from_utf8_lossy(raw).into_owned(),
+                    lossy: true,
+                },
+            });
+        }
+        Self {
+            fields: fields.into_iter(),
+        }
+    }
+
+    fn next_field(&mut self) -> Option<PathField> {
+        self.fields.next()
+    }
+}
+
+/// One NUL-delimited Git record, decoded.
+#[derive(Debug, Clone)]
+struct PathField {
+    text: String,
+    lossy: bool,
+}
+
 impl GitRepo {
     pub fn discover(start: &Path) -> Result<Self> {
         let output = Command::new("git")
@@ -160,21 +209,32 @@ impl GitRepo {
     }
 
     pub fn changed_files(&self, base: &str, matcher: &TestMatcher) -> Result<Vec<ChangedFile>> {
-        let output = self.git_text(["diff", "--name-status", "--find-renames", base, "--"])?;
         let mut files = Vec::new();
         let mut seen = HashSet::new();
 
-        for line in output.lines().filter(|line| !line.trim().is_empty()) {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 2 {
-                continue;
-            }
-            let status = parts[0];
-            let code = status.chars().next().unwrap_or('?');
-            let (previous_path, path) = if matches!(code, 'R' | 'C') && parts.len() >= 3 {
-                (Some(parts[1].to_owned()), parts[2].to_owned())
+        // `-z` is mandatory, not cosmetic. Without it Git C-quotes any path
+        // containing non-ASCII or special bytes, so `tests/café.rs` arrives as
+        // the literal text `"tests/caf\303\251.rs"` including the quotes and
+        // backslash escapes. That string matches no glob and names no file on
+        // disk, so such a change would be silently misclassified as production
+        // code and never transplanted. `-z` also NUL-delimits, so a filename
+        // containing a newline cannot desynchronize the record stream the way
+        // line-splitting does.
+        let output =
+            self.git_bytes(["diff", "--name-status", "--find-renames", "-z", base, "--"])?;
+        let mut records = NulRecords::new(&output);
+        while let Some(status) = records.next_field() {
+            let code = status.text.chars().next().unwrap_or('?');
+            let (previous, path) = if matches!(code, 'R' | 'C') {
+                match (records.next_field(), records.next_field()) {
+                    (Some(previous), Some(path)) => (Some(previous), path),
+                    _ => continue,
+                }
             } else {
-                (None, parts[1].to_owned())
+                match records.next_field() {
+                    Some(path) => (None, path),
+                    None => continue,
+                }
             };
             let kind = match code {
                 'A' => ChangeKind::Added,
@@ -186,27 +246,40 @@ impl GitRepo {
                 'U' => ChangeKind::Unmerged,
                 _ => ChangeKind::Unknown,
             };
-            seen.insert(path.clone());
+            let is_lossy = path.lossy || previous.as_ref().is_some_and(|p| p.lossy);
+            // A rename is only transplantable as a test-only change when the
+            // path it came from was also a test. Renaming production code into a
+            // test directory must not let the production file's diff ride along
+            // in a "test-only" transplant.
+            let previous_is_test = previous
+                .as_ref()
+                .is_some_and(|p| matcher.is_test_path(&p.text));
+            seen.insert(path.text.clone());
             files.push(ChangedFile {
-                is_test: matcher.is_test_path(&path),
-                path,
-                previous_path,
+                is_test: matcher.is_test_path(&path.text),
+                path: path.text,
+                previous_path: previous.map(|p| p.text),
+                previous_is_test,
                 kind,
                 tracked: true,
+                path_is_lossy: is_lossy,
             });
         }
 
-        let untracked = self.git_text(["ls-files", "--others", "--exclude-standard"])?;
-        for path in untracked.lines().filter(|line| !line.trim().is_empty()) {
-            if seen.contains(path) {
+        let untracked = self.git_bytes(["ls-files", "--others", "--exclude-standard", "-z"])?;
+        let mut untracked_records = NulRecords::new(&untracked);
+        while let Some(path) = untracked_records.next_field() {
+            if seen.contains(&path.text) {
                 continue;
             }
             files.push(ChangedFile {
-                is_test: matcher.is_test_path(path),
-                path: path.to_owned(),
+                is_test: matcher.is_test_path(&path.text),
+                path: path.text,
                 previous_path: None,
+                previous_is_test: false,
                 kind: ChangeKind::Untracked,
                 tracked: false,
+                path_is_lossy: path.lossy,
             });
         }
 
@@ -242,6 +315,30 @@ impl GitRepo {
     pub fn diff_text_for_path(&self, base: &str, path: &str) -> Result<String> {
         let bytes = self.diff_for_paths(base, &[path.to_owned()], 0)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Read a path's contents at a revision, for syntax-aware comparison.
+    ///
+    /// Returns `None` when the path did not exist at that revision, which is
+    /// the ordinary case for a newly added test file.
+    pub fn show_file_at(&self, reference: &str, path: &str) -> Result<Option<String>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .arg("show")
+            .arg(format!("{reference}:{path}"))
+            .output()
+            .with_context(|| format!("failed to read {path} at {reference}"))?;
+        if output.status.success() {
+            return Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()));
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // A path absent from a revision is a normal outcome, not a failure.
+        // Anything else stays loud rather than being mistaken for "new file".
+        if stderr.contains("does not exist") || stderr.contains("exists on disk") {
+            return Ok(None);
+        }
+        bail!("git show {reference}:{path} failed: {}", stderr.trim());
     }
 
     pub fn add_worktree(&self, path: &Path, base: &str) -> Result<()> {
@@ -409,5 +506,68 @@ impl GitRepo {
             .status()
             .context("failed to launch git")?;
         Ok(status.success())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nul_records_split_on_nul_not_newline() {
+        // A filename containing a newline must survive as one record. Splitting
+        // the output on line breaks would shred it into two bogus paths.
+        let bytes = b"M\0tests/we\nird.rs\0A\0tests/plain.rs\0";
+        let mut records = NulRecords::new(bytes);
+        assert_eq!(records.next_field().unwrap().text, "M");
+        assert_eq!(records.next_field().unwrap().text, "tests/we\nird.rs");
+        assert_eq!(records.next_field().unwrap().text, "A");
+        assert_eq!(records.next_field().unwrap().text, "tests/plain.rs");
+        assert!(records.next_field().is_none());
+    }
+
+    #[test]
+    fn nul_records_decode_non_ascii_paths_verbatim() {
+        // Without `-z`, Git renders this as "tests/caf\303\251.rs".
+        let bytes = "M\0tests/café_ünïcode.rs\0".as_bytes();
+        let mut records = NulRecords::new(bytes);
+        assert_eq!(records.next_field().unwrap().text, "M");
+        let field = records.next_field().unwrap();
+        assert_eq!(field.text, "tests/café_ünïcode.rs");
+        assert!(!field.lossy, "valid UTF-8 must not be flagged lossy");
+    }
+
+    #[test]
+    fn nul_records_flag_undecodable_paths() {
+        // Lossiness has to be detected here, at decode time. After lossy
+        // replacement the string is itself valid UTF-8, so the flag can never
+        // be recovered downstream.
+        let bytes = b"M\0tests/invalid_\xff.rs\0";
+        let mut records = NulRecords::new(bytes);
+        assert_eq!(records.next_field().unwrap().text, "M");
+        let field = records
+            .next_field()
+            .expect("record should still be present");
+        assert!(field.lossy, "undecodable path must be flagged lossy");
+        assert!(field.text.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn nul_records_tolerate_a_missing_trailing_nul() {
+        // A truncated read should not discard a real final field.
+        let bytes = b"M\0tests/plain.rs";
+        let mut records = NulRecords::new(bytes);
+        assert_eq!(records.next_field().unwrap().text, "M");
+        assert_eq!(records.next_field().unwrap().text, "tests/plain.rs");
+    }
+
+    #[test]
+    fn nul_records_skip_empty_records() {
+        // `--name-status -z` can emit empty fields; they are not paths.
+        let bytes = b"M\0\0tests/plain.rs\0";
+        let mut records = NulRecords::new(bytes);
+        assert_eq!(records.next_field().unwrap().text, "M");
+        assert_eq!(records.next_field().unwrap().text, "tests/plain.rs");
+        assert!(records.next_field().is_none());
     }
 }

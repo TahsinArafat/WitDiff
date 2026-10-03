@@ -72,13 +72,15 @@ cargo run -p witdiff -- verify --base HEAD~1
 
 Read `docs/roadmap.md`. High-value tasks currently are:
 
-1. integration tests that create temporary Git repositories and exercise red/green verification end-to-end;
-2. robust inline Rust test extraction;
-3. targeted test selection;
-4. stronger integrity analysis using syntax-aware Rust parsing;
-5. mutation testing for changed Rust functions;
-6. adapters for pytest/Vitest/Jest/Go test;
-7. MCP wrapper only after the CLI/receipt contract is stable.
+1. safe inline `#[cfg(test)] mod tests` transplantation (needs an ADR first);
+2. removed-match-arm detection in the structural analyzer;
+3. resolving `let` bindings so a rebound subject is not reported as a removal;
+4. mutation testing for changed Rust functions;
+5. adapters for pytest/Vitest/Jest/Go test;
+6. MCP wrapper only after the CLI/receipt contract is stable.
+
+Integration tests (item 1 of earlier lists) and syntax-aware integrity analysis are
+done; see `docs/roadmap.md` for what shipped in 1.0.
 
 ## What not to build yet
 

@@ -21,6 +21,21 @@ pub struct ChangedFile {
     pub kind: ChangeKind,
     pub is_test: bool,
     pub tracked: bool,
+    /// True when the path could not be decoded as UTF-8 and was lossily
+    /// replaced. Such a path does not name a file that can be read back on
+    /// disk, so WitDiff refuses to transplant it and says so in a note rather
+    /// than silently writing a file to a name that does not exist.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub path_is_lossy: bool,
+    /// For a rename or copy, whether the path the file came from was itself a
+    /// test. A `false` here means the source path was production code, so the
+    /// file must never be transplanted as part of a test-only patch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub previous_is_test: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +176,44 @@ pub struct Receipt {
     pub base_run: Option<RunResult>,
     pub red_green_proven: bool,
     pub notes: Vec<String>,
+    /// Which test command variant actually produced `head_run` and `base_run`.
+    ///
+    /// Additive in v1: a receipt written before this field existed deserializes
+    /// with `full_suite`, which matches how those runs were performed.
+    #[serde(default)]
+    pub test_selection: TestSelection,
+    /// The exact command used for the proof runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_test_command: Option<Vec<String>>,
+}
+
+/// How much of the suite the proof runs actually exercised.
+///
+/// A narrowed run is a smaller claim than a full-suite run, so the receipt
+/// records which one occurred instead of leaving a consumer to assume.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TestSelection {
+    /// The configured command ran unchanged.
+    #[default]
+    FullSuite,
+    /// The command was narrowed to cargo targets of the changed dedicated tests.
+    Targeted,
+}
+
+impl TestSelection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FullSuite => "full_suite",
+            Self::Targeted => "targeted",
+        }
+    }
+}
+
+impl std::fmt::Display for TestSelection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[cfg(test)]
@@ -209,5 +262,70 @@ mod tests {
         assert!(!VerificationStatus::VerifiedWithWarnings.is_strictly_verified());
         assert!(VerificationStatus::VerifiedWithWarnings.is_verified());
         assert!(!VerificationStatus::NotVerified.is_verified());
+    }
+
+    /// A receipt written by 0.1 carries none of the fields added in 1.0. It must
+    /// still deserialize, and the missing fields must take their conservative
+    /// defaults rather than silently claiming a narrower or cleaner run.
+    ///
+    /// This is the concrete guarantee behind "additive within v1": an agent or
+    /// CI system that stored receipts keeps working across the upgrade.
+    #[test]
+    fn receipts_written_before_1_0_still_deserialize() {
+        let legacy = r#"{
+          "schema_version": "witdiff.receipt.v1",
+          "generated_at": "2024-01-01T00:00:00Z",
+          "status": "verified",
+          "repo_root": "/repo",
+          "base": "origin/main",
+          "head_commit": "abc123",
+          "workspace_fingerprint_before": "aa",
+          "workspace_fingerprint_after": "aa",
+          "evidence_fresh": true,
+          "changed_files": [
+            {"path": "tests/a.rs", "previous_path": null, "kind": "added",
+             "is_test": true, "tracked": false}
+          ],
+          "changed_test_files": ["tests/a.rs"],
+          "integrity_findings": [],
+          "head_run": {
+            "command": ["cargo", "test"], "cwd": "/repo", "success": true,
+            "exit_code": 0, "duration_ms": 10, "stdout": "", "stderr": "",
+            "failure_kind": null
+          },
+          "base_run": null,
+          "red_green_proven": true,
+          "notes": []
+        }"#;
+
+        let receipt: Receipt = serde_json::from_str(legacy).expect("a 0.1 receipt must parse");
+
+        assert_eq!(receipt.status, VerificationStatus::Verified);
+        assert_eq!(
+            receipt.test_selection,
+            TestSelection::FullSuite,
+            "a receipt without the field must not claim a targeted run"
+        );
+        assert_eq!(
+            receipt.effective_test_command, None,
+            "an absent field must stay absent rather than being invented"
+        );
+        assert!(
+            !receipt.changed_files[0].path_is_lossy && !receipt.changed_files[0].previous_is_test,
+            "added path flags must default to the safe values"
+        );
+    }
+
+    #[test]
+    fn test_selection_tokens_match_the_schema() {
+        assert_eq!(
+            serde_json::to_string(&TestSelection::FullSuite).unwrap(),
+            "\"full_suite\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TestSelection::Targeted).unwrap(),
+            "\"targeted\""
+        );
+        assert_eq!(TestSelection::Targeted.to_string(), "targeted");
     }
 }

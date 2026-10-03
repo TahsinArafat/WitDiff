@@ -26,6 +26,16 @@ pub struct VerificationConfig {
     pub extra_test_paths: Vec<String>,
     pub block_on_integrity_findings: bool,
     pub max_output_bytes: usize,
+    /// When true, narrow the test command to the cargo targets of the changed
+    /// dedicated tests instead of running the whole suite.
+    ///
+    /// Narrowing is opportunistic and never silently substitutes evidence: it
+    /// is applied only when the configured command can be narrowed without
+    /// changing what actually runs (see [`crate::selection`]). When narrowing is
+    /// not possible the full suite runs and a note records why. A narrowed run
+    /// is a strictly smaller claim, so a failure is attributed to the changed
+    /// tests only when those tests are the ones that ran.
+    pub targeted_test_selection: bool,
     /// Wall-clock deadline in seconds for each individual test command run.
     ///
     /// A run that exceeds it is killed and recorded as `timed_out`, which can
@@ -62,6 +72,10 @@ impl Default for VerificationConfig {
             ],
             extra_test_paths: Vec::new(),
             block_on_integrity_findings: true,
+            // Narrowing makes verification faster but yields a strictly
+            // smaller claim, so it stays opt-in for v1. Enable it per
+            // repository once the full-suite path is understood.
+            targeted_test_selection: false,
             max_output_bytes: 16_384,
             // Generous by default so a cold CI build is not mistaken for a hang,
             // while still bounding a truly stuck suite.

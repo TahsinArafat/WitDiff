@@ -10,9 +10,11 @@ use crate::{
     integrity::analyze_test_diff,
     model::{
         ChangeKind, FailureKind, InspectReport, IntegrityFinding, Receipt, RunResult, Severity,
-        VerificationStatus,
+        TestSelection, VerificationStatus,
     },
     runner::{run, CommandSpec},
+    rustanalysis::analyze_rust_test_change,
+    selection::{build_targeted_command, SelectionOutcome},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -61,10 +63,43 @@ pub fn verify_repository(
 ) -> Result<Receipt> {
     let inspect = inspect_repository(repo, config, options.requested_base.as_deref())?;
     let base = inspect.base.clone();
-    let command = match options.command {
+    let configured = match options.command {
         Some(command) => command,
         None => CommandSpec::from_vec(config.verification.test_command.clone())?,
     };
+
+    // Decide once, before any evidence is collected, so the head, control and
+    // base runs all use the same command. Narrowing after the head run would
+    // make the two sides of the experiment incomparable.
+    let mut selection_notes = Vec::new();
+    let (command, test_selection) = if config.verification.targeted_test_selection {
+        let (narrowed, outcome) = build_targeted_command(&configured, &inspect.changed_test_files);
+        match outcome {
+            SelectionOutcome::Targeted(targets) => {
+                selection_notes.push(format!(
+                    "test selection: ran only the changed dedicated test targets ({})",
+                    targets.join(", ")
+                ));
+                (narrowed, TestSelection::Targeted)
+            }
+            SelectionOutcome::NoTargets => {
+                selection_notes.push(
+                    "targeted test selection was requested but the changed tests do not map to individually selectable cargo targets; the full suite was run instead"
+                        .to_owned(),
+                );
+                (configured, TestSelection::FullSuite)
+            }
+            SelectionOutcome::NotNarrowable(reason) => {
+                selection_notes.push(format!(
+                    "targeted test selection was requested but is not safe here because {reason}; the full suite was run instead"
+                ));
+                (configured, TestSelection::FullSuite)
+            }
+        }
+    } else {
+        (configured, TestSelection::FullSuite)
+    };
+    let effective_test_command = Some(command.as_vec());
 
     let before = repo.workspace_fingerprint(&base)?;
     let integrity_findings = collect_integrity(repo, &base, &inspect)?;
@@ -77,7 +112,7 @@ pub fn verify_repository(
         timeout,
     )?;
 
-    let mut notes = Vec::new();
+    let mut notes = selection_notes;
     if head_run.timed_out {
         notes.push(format!(
             "the test command exceeded the configured timeout of {} seconds and was terminated; this does not establish that the change is correct",
@@ -116,11 +151,22 @@ pub fn verify_repository(
         let experiment_result = match control_result {
             Ok(control) if control.success => {
                 base_control_run = Some(control);
-                (|| -> Result<Option<RunResult>> {
+                (|| -> Result<Option<(RunResult, Vec<String>)>> {
                     let mut tracked_tests: Vec<String> = Vec::new();
+                    let mut blocked_tests: Vec<String> = Vec::new();
                     for file in inspect.changed_files.iter().filter(|f| {
                         f.is_test && f.tracked && !matches!(f.kind, ChangeKind::Deleted)
                     }) {
+                        // A rename whose source path was production code cannot be
+                        // transplanted as a test-only change: including the old
+                        // path would pull the production file's diff onto base
+                        // and make the experiment prove nothing about the test.
+                        let from_production =
+                            file.previous_path.is_some() && !file.previous_is_test;
+                        if from_production || file.path_is_lossy {
+                            blocked_tests.push(file.path.clone());
+                            continue;
+                        }
                         if let Some(previous) = &file.previous_path {
                             tracked_tests.push(previous.clone());
                         }
@@ -131,19 +177,22 @@ pub fn verify_repository(
                     let untracked_tests: Vec<String> = inspect
                         .changed_files
                         .iter()
-                        .filter(|f| f.is_test && !f.tracked)
+                        .filter(|f| f.is_test && !f.tracked && !f.path_is_lossy)
                         .map(|f| f.path.clone())
                         .collect();
 
                     let patch = repo.diff_for_paths(&base, &tracked_tests, 3)?;
                     repo.apply_patch(&worktree, &patch)?;
                     repo.copy_untracked_files(&worktree, &untracked_tests)?;
-                    Ok(Some(run(
-                        &command,
-                        &worktree,
-                        config.verification.max_output_bytes,
-                        timeout,
-                    )?))
+                    Ok(Some((
+                        run(
+                            &command,
+                            &worktree,
+                            config.verification.max_output_bytes,
+                            timeout,
+                        )?,
+                        blocked_tests,
+                    )))
                 })()
             }
             Ok(control) => {
@@ -176,7 +225,12 @@ pub fn verify_repository(
 
         match experiment {
             None => VerificationStatus::NotVerified,
-            Some(result) => {
+            Some((result, blocked_tests)) => {
+                for blocked in &blocked_tests {
+                    notes.push(format!(
+                        "changed test {blocked} was not transplanted: it was renamed from a non-test path or its name is not representable as UTF-8, so a test-only transplant could not be constructed for it"
+                    ));
+                }
                 let candidate_status = match result.failure_kind {
                     Some(FailureKind::TestFailure) if !result.success => {
                         red_green_proven = true;
@@ -185,6 +239,11 @@ pub fn verify_repository(
                             .any(|f| f.severity == Severity::High);
                         if config.verification.block_on_integrity_findings && has_high {
                             notes.push("red/green behavior was observed, but high-severity test-integrity findings block verification".into());
+                            VerificationStatus::NotVerified
+                        } else if !blocked_tests.is_empty() {
+                            // Proof came from a partial transplant. The
+                            // experiment cannot speak for the excluded files.
+                            notes.push("red/green behavior was observed, but not every changed test could be transplanted, so the result is not a complete proof".into());
                             VerificationStatus::NotVerified
                         } else if integrity_findings.is_empty() {
                             VerificationStatus::Verified
@@ -242,9 +301,21 @@ pub fn verify_repository(
         base_run,
         red_green_proven,
         notes,
+        test_selection,
+        effective_test_command,
     })
 }
 
+/// Collect test-integrity findings for every changed dedicated test.
+///
+/// Rust test files are compared structurally: the base and head revisions are
+/// both parsed and their test/assertion shapes diffed. That is strictly more
+/// accurate than reading added and removed lines, because it can tell an
+/// assertion that merely moved from one that was deleted.
+///
+/// The line-oriented analyzer remains the fallback for a file that cannot be
+/// parsed as Rust, so a non-Rust or temporarily broken test file still produces
+/// findings rather than silently producing none.
 fn collect_integrity(
     repo: &GitRepo,
     base: &str,
@@ -258,6 +329,42 @@ fn collect_integrity(
             .find(|file| file.path == *path)
             .map(|file| file.tracked)
             .unwrap_or(true);
+
+        if path.ends_with(".rs") {
+            let head_source = fs::read_to_string(repo.root().join(path))
+                .with_context(|| format!("failed reading test {path}"))?;
+            let base_source = if tracked {
+                repo.show_file_at(base, path)?
+            } else {
+                None
+            };
+
+            let structural = analyze_rust_test_change(path, base_source.as_deref(), &head_source);
+            let parsed = !structural
+                .iter()
+                .any(|finding| finding.rule == "test_source_unparsable");
+
+            if parsed {
+                findings.extend(structural);
+                continue;
+            }
+
+            // The structural pass could not read the file, so fall back to the
+            // line-oriented rules. Both sets are kept: the structural pass may
+            // still have produced additive findings that remain valid.
+            findings.extend(structural);
+            let diff = if tracked {
+                repo.diff_text_for_path(base, path)?
+            } else {
+                head_source
+                    .lines()
+                    .map(|line| format!("+{line}\n"))
+                    .collect()
+            };
+            findings.extend(analyze_test_diff(path, &diff));
+            continue;
+        }
+
         let diff = if tracked {
             repo.diff_text_for_path(base, path)?
         } else {

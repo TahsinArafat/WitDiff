@@ -51,15 +51,21 @@ Implemented:
 - test-only patch transplantation
 - HEAD test execution
 - BASE test execution
+- optional targeted cargo test selection that records exactly what ran
 - cargo failure classification (test failure vs compile failure)
 - red/green proof status
-- basic Rust test-integrity rules
+- syntax-aware Rust test-integrity rules (removed/changed/weakened assertions, removed tests, unparsable files)
+- line-oriented integrity rules for non-Rust test files
+- NUL-delimited Git path handling so non-ASCII paths are classified correctly
+- a test-only transplant boundary (no production diff enters a test transplant)
 - workspace evidence fingerprinting
 - JSON receipt persistence
 - human and JSON CLI output
 - `init`, `doctor`, `inspect`, `verify`, and `receipt` commands
 
 Known v0.1 limitation: Rust inline unit tests inside the same production source file cannot yet be transplanted independently. WitDiff detects likely inline-test edits and reports them as a note instead of pretending to have verified them.
+
+Targeted test selection is cargo-only and opt-in (`verification.targeted_test_selection`, default `false`). When the configured command cannot be narrowed without changing what runs, WitDiff runs the full suite and records why. See [`docs/verification-model.md`](docs/verification-model.md).
 
 ## Build
 
@@ -158,8 +164,6 @@ The next milestones are intentionally ordered so agents can work independently:
 
 - inline Rust unit-test extraction/transplantation;
 - changed-code mutation testing;
-- stronger test-integrity analysis using a Rust parser;
-- targeted test execution rather than whole-suite execution;
 - Python/pytest, JS/Vitest/Jest, and Go adapters;
 - receipt signing/attestation;
 - GitHub Actions integration and PR annotations;
