@@ -452,6 +452,16 @@ impl GitRepo {
         })
     }
 
+    /// Head-revision line numbers touched by a path's diff, 1-based.
+    ///
+    /// Used by mutation to restrict candidates to the changed lines, so cost
+    /// tracks the change rather than the file size (ADR-0011). Only added and
+    /// context lines have head positions; a removed line exists only in base.
+    pub fn changed_head_lines(&self, base: &str, path: &str) -> Result<Vec<usize>> {
+        let diff = self.diff_text_for_path(base, path)?;
+        Ok(parse_changed_head_lines(&diff))
+    }
+
     /// Read a repository-relative path from the working tree.
     ///
     /// Returns `None` when the path is absent or is not valid UTF-8, because a
@@ -555,6 +565,58 @@ impl GitRepo {
     }
 }
 
+/// Head-revision line numbers that a unified diff adds or carries as context.
+///
+/// Hunk headers are `@@ -base_start,base_len +head_start,head_len @@`. Walking
+/// the body lets each line be attributed to its head position: context lines
+/// (` `) and added lines (`+`) advance the head counter, removed lines (`-`) do
+/// not, because they exist only in the base revision.
+fn parse_changed_head_lines(diff: &str) -> Vec<usize> {
+    let mut lines = Vec::new();
+    let mut head_line = 0usize;
+    let mut in_hunk = false;
+
+    for raw in diff.lines() {
+        if let Some(rest) = raw.strip_prefix("@@ ") {
+            let head = rest
+                .split_whitespace()
+                .find(|token| token.starts_with('+'))
+                .and_then(|token| {
+                    let start = token.trim_start_matches('+');
+                    start.split(',').next().map(str::to_owned)
+                })
+                .and_then(|start| start.parse::<usize>().ok());
+            match head {
+                Some(start) => {
+                    head_line = start;
+                    in_hunk = true;
+                }
+                None => in_hunk = false,
+            }
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+        match raw.as_bytes().first() {
+            Some(b'+') => {
+                lines.push(head_line);
+                head_line += 1;
+            }
+            Some(b' ') => {
+                lines.push(head_line);
+                head_line += 1;
+            }
+            Some(b'-') => {}
+            _ => {}
+        }
+    }
+
+    lines.sort_unstable();
+    lines.dedup();
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +667,46 @@ mod tests {
         let mut records = NulRecords::new(bytes);
         assert_eq!(records.next_field().unwrap().text, "M");
         assert_eq!(records.next_field().unwrap().text, "tests/plain.rs");
+    }
+
+    #[test]
+    fn changed_head_lines_attributes_added_and_context_lines() {
+        // A raw string, because a `\`-continued string literal strips the
+        // leading space of each line — which would silently delete the context
+        // markers this test exists to check.
+        let diff = r"diff --git a/f.rs b/f.rs
+--- a/f.rs
++++ b/f.rs
+@@ -1,4 +1,4 @@
+ ctx1
+-removed
++added3
+ ctx3
+ ctx4
+@@ -9,4 +10,5 @@ fn thing()
+ ctx10
+ ctx11
++added12
+ ctx12
+ ctx13
+";
+        let lines = parse_changed_head_lines(diff);
+        // Head positions: ctx1=1, added3=2, ctx3=3, ctx4=4. Removed lines
+        // consume no head position.
+        assert_eq!(lines, vec![1, 2, 3, 4, 10, 11, 12, 13, 14]);
+    }
+
+    #[test]
+    fn changed_head_lines_ignores_file_headers() {
+        let diff = "--- a/f.rs\n+++ b/f.rs\n";
+        assert!(parse_changed_head_lines(diff).is_empty());
+    }
+
+    #[test]
+    fn changed_head_lines_handles_a_single_line_hunk_header() {
+        // Git omits `,1` for one-line ranges: `@@ -7 +7 @@`.
+        let diff = "@@ -7 +7 @@\n-old\n+new\n";
+        assert_eq!(parse_changed_head_lines(diff), vec![7]);
     }
 
     #[test]

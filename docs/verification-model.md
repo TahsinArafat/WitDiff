@@ -125,6 +125,37 @@ Production changes elsewhere in the same file do **not** block the splice. A
 commit that fixes a bug and tightens its inline test is the normal shape of a
 change, and the production change is simply not transplanted.
 
+## Changed-code mutation
+
+Mutation answers a question the red/green experiment cannot: a transplanted test
+can fail on the base revision for the right reason and still barely constrain
+the changed code. WitDiff mutates the changed production lines and observes
+whether the suite notices (ADR-0011).
+
+It is **opt-in** (`verification.mutation`, default off) and **supplementary**: it
+never changes `status` and never sets `red_green_proven`. A surviving mutant is a
+question about test strength, not a verdict about correctness, so the receipt
+reports counts and per-mutant detail rather than a score.
+
+Each mutant is classified into exactly one outcome:
+
+- `killed` — the suite failed with a recognized test failure;
+- `survived` — the suite passed, so the tests do not detect that change;
+- `not_compiled` — the mutant did not build, so it was never executed;
+- `timeout` — the run exceeded its deadline and decided nothing;
+- `skipped` — a bound was reached before the mutant ran, or it could not be
+  applied.
+
+Only `killed` and `survived` are decisions about the tests. `not_compiled` in
+particular is **not** a kill: counting it as one would inflate the signal with
+mutants that were never observably wrong.
+
+Mutants are generated only from changed lines of changed production files, and
+never from test code. Mutating a test's own expected value would change the
+oracle — the question rather than the answer. Some mutants are equivalent to the
+original program and can never be killed by any test; WitDiff does not attempt
+equivalence detection and says so rather than guessing.
+
 ## Targeted test selection
 
 Opt-in through `verification.targeted_test_selection`, default `false`. When

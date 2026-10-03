@@ -12,4 +12,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0008: targeted test selection refuses rather than approximating a narrow run
 - ADR-0009: Git path output is read NUL-delimited and decoding loss is recorded
 - ADR-0010: inline `#[cfg(test)]` tests are transplanted by span splicing, or not
-  at all (proposed; not yet implemented)
+  at all
+- ADR-0011: mutation is a supplementary signal, never a proof

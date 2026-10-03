@@ -63,9 +63,11 @@ Implemented:
 - human and JSON CLI output
 - `init`, `doctor`, `inspect`, `verify`, and `receipt` commands
 
-Known v0.1 limitation: Rust inline unit tests inside the same production source file cannot yet be transplanted independently. WitDiff detects likely inline-test edits and reports them as a note instead of pretending to have verified them.
+Rust inline `#[cfg(test)] mod tests` blocks are transplanted by span splicing: only the test module's bytes move, so production changes elsewhere in the same file stay at the base revision. A file is refused, and the reason recorded, when it cannot be spliced safely (`unparsable`, `no_counterpart_in_base`, `test_outside_test_module`). See ADR-0010.
 
 Targeted test selection is cargo-only and opt-in (`verification.targeted_test_selection`, default `false`). When the configured command cannot be narrowed without changing what runs, WitDiff runs the full suite and records why. See [`docs/verification-model.md`](docs/verification-model.md).
+
+Changed-code mutation is opt-in (`verification.mutation`, default `false`) and **supplementary**: it never changes `status`. Each mutant is classified `killed`, `survived`, `not_compiled`, `timeout` or `skipped`, and only the first two are decisions about test strength — a mutant that failed to build was never executed and is not counted as a kill. See ADR-0011.
 
 ## Build
 
@@ -162,8 +164,8 @@ See [`AGENTS.md`](AGENTS.md) and [`docs/agents.md`](docs/agents.md).
 
 The next milestones are intentionally ordered so agents can work independently:
 
-- inline Rust unit-test extraction/transplantation;
-- changed-code mutation testing;
+- the remaining mutation operators (condition negation, numeric return substitution);
+- resolving `let` bindings so a rebound subject is not reported as a removal;
 - Python/pytest, JS/Vitest/Jest, and Go adapters;
 - receipt signing/attestation;
 - GitHub Actions integration and PR annotations;

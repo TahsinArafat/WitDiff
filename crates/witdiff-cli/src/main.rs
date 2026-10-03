@@ -7,8 +7,8 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use witdiff_core::{
-    config::Config, inspect_repository, verify::write_receipt, verify_repository, CommandSpec,
-    GitRepo, Receipt, Severity, VerifyOptions,
+    config::Config, inspect_repository, model::MutantOutcome, verify::write_receipt,
+    verify_repository, CommandSpec, GitRepo, Receipt, Severity, VerifyOptions,
 };
 
 #[derive(Debug, Parser)]
@@ -334,6 +334,36 @@ fn print_receipt_summary(receipt: &Receipt) {
             "  not spliced      : {} [{}] {}",
             entry.path, entry.reason, entry.explanation
         );
+    }
+    if let Some(mutation) = &receipt.mutation {
+        println!(
+            "  mutation         : {} generated, {} killed, {} survived, {} not compiled, {} timeout, {} skipped",
+            mutation.generated,
+            mutation.killed,
+            mutation.survived,
+            mutation.not_compiled,
+            mutation.timeout,
+            mutation.skipped
+        );
+        for result in mutation
+            .results
+            .iter()
+            .filter(|result| result.outcome == MutantOutcome::Survived)
+        {
+            println!(
+                "    survived {} {}:{} `{}` -> `{}`{}",
+                result.operator,
+                result.path,
+                result.line,
+                result.original,
+                result.replacement,
+                result
+                    .function
+                    .as_ref()
+                    .map(|name| format!(" in {name}"))
+                    .unwrap_or_default()
+            );
+        }
     }
     for note in &receipt.notes {
         println!("  note             : {note}");

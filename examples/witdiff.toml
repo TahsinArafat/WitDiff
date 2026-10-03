@@ -20,3 +20,11 @@ max_output_bytes = 16384
 # fact about the candidate, not a WitDiff malfunction, so it is reported
 # rather than allowed to block. Remove the key to disable the deadline.
 timeout_secs = 900
+
+# Changed-code mutation analysis. Supplementary evidence only: it never changes
+# the verification status. Off by default because each mutant costs a full test
+# run. Bounds are mandatory, since mutation cost is otherwise unbounded; the
+# truncation is deterministic.
+mutation = false
+max_mutants = 25
+max_mutants_per_function = 5

@@ -42,6 +42,27 @@ pub struct VerificationConfig {
     /// never satisfy a proof. A hung suite is a fact about the candidate, not a
     /// WitDiff malfunction, so it is reported rather than allowed to block.
     pub timeout_secs: Option<u64>,
+    /// Whether to mutate the changed production code and observe the tests.
+    ///
+    /// Off by default: each mutant costs a full test run (ADR-0011). Mutation is
+    /// supplementary evidence and never changes `status`.
+    #[serde(default)]
+    pub mutation: bool,
+    /// Maximum mutants attempted per run. Bounds are mandatory because mutation
+    /// cost is otherwise unbounded; the truncation is deterministic.
+    #[serde(default = "default_max_mutants")]
+    pub max_mutants: usize,
+    /// Maximum mutants attempted per changed function.
+    #[serde(default = "default_max_mutants_per_function")]
+    pub max_mutants_per_function: usize,
+}
+
+fn default_max_mutants() -> usize {
+    25
+}
+
+fn default_max_mutants_per_function() -> usize {
+    5
 }
 
 impl Default for ProjectConfig {
@@ -80,6 +101,9 @@ impl Default for VerificationConfig {
             // Generous by default so a cold CI build is not mistaken for a hang,
             // while still bounding a truly stuck suite.
             timeout_secs: Some(900),
+            mutation: false,
+            max_mutants: default_max_mutants(),
+            max_mutants_per_function: default_max_mutants_per_function(),
         }
     }
 }
@@ -153,6 +177,34 @@ fn normalize(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The defaults that ADR-0011 and the README promise. Mutation is opt-in
+    /// because each mutant costs a full test run, and the bounds exist so an
+    /// unbounded mutant population cannot run away.
+    ///
+    /// This test exists because a surviving mutant found it missing: flipping
+    /// `mutation: false` to `true` in the default broke no test, even though
+    /// the documentation states the opposite.
+    #[test]
+    fn defaults_keep_optional_and_costly_features_off() {
+        let config = VerificationConfig::default();
+        assert!(
+            !config.mutation,
+            "mutation must be off by default: it costs a test run per mutant"
+        );
+        assert!(
+            !config.targeted_test_selection,
+            "targeted selection must be off by default"
+        );
+        assert!(
+            config.max_mutants > 0 && config.max_mutants_per_function > 0,
+            "mutation bounds must be positive, or no mutant could ever run"
+        );
+        assert!(
+            config.block_on_integrity_findings,
+            "high-severity integrity findings must block verification by default"
+        );
+    }
 
     #[test]
     fn default_matcher_finds_rust_integration_tests() {

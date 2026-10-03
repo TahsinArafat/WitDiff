@@ -3,6 +3,8 @@ pub mod git;
 pub mod inline;
 pub mod integrity;
 pub mod model;
+pub mod mutation;
+pub mod mutation_runner;
 pub mod runner;
 pub mod rustanalysis;
 pub mod selection;

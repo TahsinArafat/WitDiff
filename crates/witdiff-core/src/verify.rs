@@ -329,6 +329,55 @@ pub fn verify_repository(
         ));
     }
 
+    // Mutation runs last and its result is deliberately not consulted above:
+    // it is supplementary evidence that can never change `status` (ADR-0011).
+    // It runs against the head revision in its own worktree, so it cannot
+    // disturb the developer's working tree.
+    let mutation = if config.verification.mutation {
+        let production_paths: Vec<String> = inspect
+            .changed_files
+            .iter()
+            .filter(|file| {
+                !file.is_test
+                    && !matches!(file.kind, ChangeKind::Deleted)
+                    && !file.path_is_lossy
+                    && file.path.ends_with(".rs")
+            })
+            .map(|file| file.path.clone())
+            .collect();
+        match crate::mutation_runner::analyze_mutations(
+            repo,
+            config,
+            &command,
+            &base,
+            &production_paths,
+            timeout,
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                // A mutation failure must not fail the verification: the
+                // red/green evidence is already collected and remains valid.
+                notes.push(format!(
+                    "mutation analysis did not complete: {error}; the red/green evidence above is unaffected"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(report) = &mutation {
+        if report.survived > 0 {
+            notes.push(format!(
+                "{} mutant(s) survived: the changed tests do not detect the listed behavior changes",
+                report.survived
+            ));
+        }
+        for note in &report.notes {
+            notes.push(format!("mutation: {note}"));
+        }
+    }
+
     let after = repo.workspace_fingerprint(&base)?;
     let evidence_fresh = before == after;
     if !evidence_fresh {
@@ -360,6 +409,7 @@ pub fn verify_repository(
         effective_test_command,
         spliced_inline_tests,
         refused_inline_tests,
+        mutation,
     })
 }
 

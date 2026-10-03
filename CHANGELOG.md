@@ -4,6 +4,25 @@
 
 ### Added
 
+- **Changed-code mutation analysis** (ADR-0011), opt-in via
+  `verification.mutation` and off by default. Mutants are generated for the
+  changed lines of changed production Rust files and confined to code outside
+  every `#[cfg(test)]` module, from the parsed tree rather than by text
+  matching. Operators: equality flip, comparison boundary, logical flip,
+  boolean literal flip. Each mutant is classified `killed`, `survived`,
+  `not_compiled`, `timeout` or `skipped` — and only the first two are decisions
+  about test strength. A mutant that failed to build was never executed and is
+  never counted as a kill.
+- **Mutation is supplementary and cannot create a proof.** It never affects
+  `status` and never sets `red_green_proven`; a surviving mutant is a question
+  about test strength, not a verdict. Runs are bounded by `max_mutants` and
+  `max_mutants_per_function`, and outcomes are cached by mutant ID, test
+  fingerprint and command so a re-run does not repeat the suite.
+- Receipt fields for mutation: `generated`, `killed`, `survived`,
+  `not_compiled`, `timeout`, `skipped`, per-mutant `results` and `notes`. All
+  additive and optional, so a receipt written before the field existed still
+  parses; the section is omitted entirely when mutation is disabled.
+
 - **Inline `#[cfg(test)]` transplantation** (ADR-0010). A changed inline test
   module is now transplanted onto the base revision instead of being reported
   as an unsupported case. `syn` locates the module spans in head and those spans

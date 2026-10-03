@@ -129,6 +129,17 @@
       "items": {
         "$ref": "#/$defs/refused_inline_tests"
       }
+    },
+    "mutation": {
+      "description": "Changed-code mutation evidence. Supplementary only: it never affects `status`, because a surviving mutant is a question about test strength rather than a verdict about correctness (ADR-0011). Omitted when mutation is disabled.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/mutation_report"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "$defs": {
@@ -282,6 +293,120 @@
         "explanation": {
           "type": "string",
           "description": "Operator-facing explanation of the failed precondition."
+        }
+      }
+    },
+    "mutation_report": {
+      "type": "object",
+      "required": [
+        "generated",
+        "killed",
+        "survived",
+        "not_compiled",
+        "timeout",
+        "skipped"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "generated": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Mutants generated for the changed production code, before the run bound was applied."
+        },
+        "killed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "survived": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Mutants the tests did not detect. Each is a question about test strength, not a verdict."
+        },
+        "not_compiled": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Mutants that failed to build and were therefore never executed. Never counted as kills."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Mutants not attempted because a bound was reached."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mutant_result"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mutant_result": {
+      "type": "object",
+      "required": [
+        "id",
+        "path",
+        "operator",
+        "line",
+        "original",
+        "replacement",
+        "outcome"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Deterministic identifier derived from path, span and operator."
+        },
+        "path": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string",
+          "enum": [
+            "equality_flip",
+            "comparison_boundary",
+            "logical_flip",
+            "boolean_flip"
+          ]
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "function": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "original": {
+          "type": "string"
+        },
+        "replacement": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "killed",
+            "survived",
+            "not_compiled",
+            "timeout",
+            "skipped"
+          ]
+        },
+        "cached": {
+          "type": "boolean"
         }
       }
     }

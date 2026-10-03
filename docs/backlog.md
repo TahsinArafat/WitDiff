@@ -137,22 +137,25 @@ Allow organizations to mark integrity rules as block/warn/ignore without changin
 
 ### PG-301: mutation IR
 
-Define deterministic mutant ID, source span, operator, original/replacement representation.
+Status: done (ADR-0011). `witdiff_core::mutation` defines the mutant as a byte
+span plus an operator, with a deterministic ID derived from path, span and
+operator so the same revision pair yields the same IDs across runs.
 
 ### PG-302: Rust mutation operators
 
-Initial operators:
+Status: mostly done. Shipped: equality flip, comparison boundary, logical flip,
+boolean literal flip. Still open: condition negation and simple numeric
+return-value substitutions.
 
-- `==` <-> `!=`;
-- `<` <-> `<=`, `>` <-> `>=`;
-- boolean literal flip;
-- condition negation;
-- `&&` <-> `||`;
-- simple numeric return substitutions.
+Mutants are confined to changed lines and to code outside every `#[cfg(test)]`
+module, enforced from the parsed tree rather than by text matching.
 
 ### PG-303: mutation receipt extension
 
-Introduce `witdiff.receipt.v2` only after v1 remains readable. Do not mutate v1 semantics in-place.
+Status: done without a v2. The roadmap predicted `witdiff.receipt.v2`, but no v1
+semantics needed to change: the mutation report is a new optional field, so
+`witdiff.receipt.v1` stays readable and a receipt written before the field
+existed still parses.
 
 ## P4 — adapters
 

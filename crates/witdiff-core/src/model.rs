@@ -197,6 +197,106 @@ pub struct Receipt {
     /// "WitDiff did not try".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_inline_tests: Vec<RefusedInlineTests>,
+    /// Changed-code mutation evidence, when enabled.
+    ///
+    /// Supplementary only: this field never affects `status` (ADR-0011).
+    /// Additive in v1 and omitted when mutation is disabled, so a receipt
+    /// written before this field existed still parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation: Option<MutationReport>,
+}
+
+/// The outcome of running the suite against one mutant.
+///
+/// `NotCompiled`, `Timeout` and `Skipped` are deliberately distinct from
+/// `Survived`: none of them is a decision about test strength, and collapsing
+/// any of them into a kill or a survivor would misreport what was observed
+/// (ADR-0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MutantOutcome {
+    /// The suite failed with a recognized test failure.
+    Killed,
+    /// The suite passed: the tests did not notice the change.
+    Survived,
+    /// The mutated source did not build, so it was never executed.
+    NotCompiled,
+    /// The run exceeded the deadline. No proof path accepts this.
+    Timeout,
+    /// A bound was reached before this mutant ran.
+    Skipped,
+}
+
+impl MutantOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MutantOutcome::Killed => "killed",
+            MutantOutcome::Survived => "survived",
+            MutantOutcome::NotCompiled => "not_compiled",
+            MutantOutcome::Timeout => "timeout",
+            MutantOutcome::Skipped => "skipped",
+        }
+    }
+}
+
+/// One mutant and what the suite did about it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MutantResult {
+    pub id: String,
+    pub path: String,
+    pub operator: String,
+    pub line: usize,
+    pub function: Option<String>,
+    pub original: String,
+    pub replacement: String,
+    pub outcome: MutantOutcome,
+    /// True when the outcome came from the cache rather than a fresh run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cached: bool,
+}
+
+/// Mutation evidence for a verification run.
+///
+/// Supplementary by construction: nothing in this struct can change
+/// [`VerificationStatus`]. It reports what was decided, and how much of the
+/// generated mutant set was actually decided, so a consumer is never left to
+/// infer a score (ADR-0011).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MutationReport {
+    /// Mutants generated for the changed production code.
+    pub generated: usize,
+    pub killed: usize,
+    pub survived: usize,
+    pub not_compiled: usize,
+    pub timeout: usize,
+    pub skipped: usize,
+    /// Results for every mutant that was attempted, plus skipped placeholders.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<MutantResult>,
+    /// Why mutation did not cover everything it could have, when applicable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+impl MutationReport {
+    /// Counts by outcome, for the summary line.
+    pub fn count(&mut self, outcome: MutantOutcome) {
+        match outcome {
+            MutantOutcome::Killed => self.killed += 1,
+            MutantOutcome::Survived => self.survived += 1,
+            MutantOutcome::NotCompiled => self.not_compiled += 1,
+            MutantOutcome::Timeout => self.timeout += 1,
+            MutantOutcome::Skipped => self.skipped += 1,
+        }
+    }
+
+    /// Mutants whose outcome is a decision about the tests.
+    ///
+    /// Excludes `not_compiled`, `timeout` and `skipped`, which are facts about
+    /// the mutant or the bounds rather than about test strength.
+    pub fn decided(&self) -> usize {
+        self.killed + self.survived
+    }
 }
 
 /// A file whose inline test module was transplanted onto the base revision.

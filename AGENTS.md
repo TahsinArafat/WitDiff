@@ -74,13 +74,14 @@ Read `docs/roadmap.md`. High-value tasks currently are:
 
 1. resolving `let` bindings so a rebound subject is not reported as a removal;
 2. removed-error-check detection in the structural analyzer;
-3. mutation testing for changed Rust functions;
+3. the remaining mutation operators (condition negation, numeric return substitution);
 4. adapters for pytest/Vitest/Jest/Go test;
 5. MCP wrapper only after the CLI/receipt contract is stable.
 
 Integration tests, syntax-aware integrity analysis including `match`-arm
-comparison, targeted test selection, and inline `#[cfg(test)]` transplantation
-(ADR-0010) are done; see `docs/roadmap.md` for what shipped in 1.0.
+comparison, targeted test selection, inline `#[cfg(test)]` transplantation
+(ADR-0010), and changed-code mutation (ADR-0011) are done; see `docs/roadmap.md`
+for what shipped.
 
 ## What not to build yet
 

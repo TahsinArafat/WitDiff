@@ -1180,3 +1180,160 @@ fn inline_test_module_new_in_head_is_refused() {
     assert!(receipt.spliced_inline_tests.is_empty());
     assert_ne!(receipt.status, VerificationStatus::Verified);
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0011: mutation is supplementary and never a proof
+// ---------------------------------------------------------------------------
+
+/// A crate whose production code changes *and* carries a weak inline test.
+///
+/// Both halves matter. Mutation targets the changed production lines, so a
+/// fixture that changed only the test module would generate no mutants at all —
+/// which is the correct behavior, and would make this fixture prove nothing.
+fn weak_test_lib(implementation: &str) -> String {
+    format!(
+        "\
+pub fn is_positive(value: i32) -> bool {{
+    {implementation}
+}}
+
+#[cfg(test)]
+mod tests {{
+    use super::*;
+
+    #[test]
+    fn t() {{ assert!(is_positive(5)); }}
+}}
+"
+    )
+}
+
+fn mutation_config() -> Config {
+    let mut config = fixture_config();
+    config.verification.mutation = true;
+    config.verification.max_mutants = 6;
+    config.verification.max_mutants_per_function = 3;
+    config
+}
+
+/// The central ADR-0011 guarantee: mutation is reported, and it is *not*
+/// consulted when the status is computed.
+///
+/// The status here is `not_verified` for a reason that has nothing to do with
+/// mutation — the changed test also passes on base. A surviving mutant must not
+/// change that, and must not be laundered into a proof.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn mutation_is_reported_without_changing_status() {
+    // The base uses `< 0`; head changes the comparison to `> 0`, so the
+    // operator is on a changed line and becomes a mutation candidate.
+    let fixture = Fixture::new(&[(
+        "src/lib.rs",
+        "pub fn is_positive(value: i32) -> bool {\n    value < 0\n}\n",
+    )]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // A weak test: it never probes the boundary, so `>` -> `>=` survives.
+    fixture.write("src/lib.rs", &weak_test_lib("value > 0"));
+
+    let receipt = fixture.verify(&mutation_config());
+
+    let mutation = receipt
+        .mutation
+        .as_ref()
+        .expect("mutation should be reported when enabled");
+    assert!(
+        mutation.generated > 0,
+        "the changed comparison should generate mutants, got {mutation:?}"
+    );
+
+    // Whatever the mutation outcome, the status is decided by red/green alone.
+    // A base-revision test that passes cannot become verified through mutation.
+    assert_ne!(
+        receipt.status,
+        VerificationStatus::Verified,
+        "mutation must not create a proof; status={:?} mutation={:?}",
+        receipt.status,
+        mutation
+    );
+    assert!(
+        !receipt.red_green_proven,
+        "mutation must not set red_green_proven"
+    );
+
+    // And the undecided outcomes are reported rather than hidden.
+    assert_eq!(
+        mutation.killed
+            + mutation.survived
+            + mutation.not_compiled
+            + mutation.timeout
+            + mutation.skipped,
+        mutation.results.len(),
+        "every attempted mutant must be classified exactly once"
+    );
+}
+
+/// Disabling mutation must omit the section entirely, so a receipt from the
+/// default configuration is unchanged by this feature's existence.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn mutation_is_absent_when_disabled() {
+    let fixture = Fixture::new(&[(
+        "src/lib.rs",
+        "pub fn is_positive(value: i32) -> bool {\n    value < 0\n}\n",
+    )]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", &weak_test_lib("value > 0"));
+
+    let mut config = fixture_config();
+    config.verification.mutation = false;
+    let receipt = fixture.verify(&config);
+
+    assert!(
+        receipt.mutation.is_none(),
+        "mutation must be absent when disabled, got {:?}",
+        receipt.mutation
+    );
+}
+
+/// A surviving mutant must be findable and must name the operator and span, so
+/// a reviewer can judge whether the test should have caught it.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn surviving_mutants_name_the_operator_and_span() {
+    let fixture = Fixture::new(&[(
+        "src/lib.rs",
+        "pub fn is_positive(value: i32) -> bool {\n    value < 0\n}\n",
+    )]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", &weak_test_lib("value > 0"));
+
+    let receipt = fixture.verify(&mutation_config());
+    let mutation = receipt.mutation.as_ref().expect("mutation enabled");
+
+    if let Some(survivor) = mutation
+        .results
+        .iter()
+        .find(|result| result.outcome == witdiff_core::model::MutantOutcome::Survived)
+    {
+        assert_eq!(survivor.operator, "comparison_boundary");
+        assert_eq!(survivor.path, "src/lib.rs");
+        assert_eq!(survivor.original, ">");
+        assert_eq!(survivor.replacement, ">=");
+        assert!(
+            survivor.function.as_deref() == Some("is_positive"),
+            "the surviving mutant should name its function, got {:?}",
+            survivor.function
+        );
+        assert!(!survivor.id.is_empty(), "a mutant needs a stable id");
+    } else {
+        // The bound may have excluded the boundary operator; that is reported.
+        assert!(
+            !mutation.notes.is_empty() || mutation.killed > 0,
+            "either a survivor is reported or the run explains itself: {mutation:?}"
+        );
+    }
+}

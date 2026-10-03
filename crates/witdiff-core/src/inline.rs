@@ -174,6 +174,22 @@ pub fn splice_inline_tests(base_source: &str, head_source: &str) -> SpliceOutcom
     SpliceOutcome::Spliced(spliced)
 }
 
+/// The byte ranges of every `#[cfg(test)]` module in a revision.
+///
+/// Shared with the mutation module, which must never mutate test code: the two
+/// features agreeing on what counts as a test is the point.
+pub fn test_module_regions(source: &str) -> Vec<(usize, usize)> {
+    let Ok(parsed) = syn::parse_file(source) else {
+        return Vec::new();
+    };
+    let mut regions: Vec<(usize, usize)> = collect_test_modules(&parsed, source)
+        .into_values()
+        .map(|module| (module.start, module.end))
+        .collect();
+    regions.sort_unstable();
+    regions
+}
+
 /// The identities of the `#[cfg(test)]` modules in a revision.
 ///
 /// Recorded in the receipt so a reader knows which modules were transplanted,
