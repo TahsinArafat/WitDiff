@@ -1,0 +1,22 @@
+name: WitDiff example
+
+on:
+  pull_request:
+
+jobs:
+  witdiff:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build WitDiff from this repository
+        run: cargo build -p witdiff
+      - name: Verify changed tests
+        run: |
+          ./target/debug/witdiff verify \
+            --base "origin/${{ github.base_ref }}" \
+            --strict

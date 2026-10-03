@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a new proof capability
+title: "[feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Verification problem
+      description: Describe the false-positive/false-negative evidence problem, not just a UI feature.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Deterministic evidence source
+      description: What observable facts would support the new proof?
+    validations:
+      required: true
+  - type: textarea
+    id: ambiguity
+    attributes:
+      label: Ambiguous/unsupported cases
+    validations:
+      required: true

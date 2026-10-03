@@ -1,0 +1,5 @@
+Before claiming that a code change is complete, run:
+
+    witdiff verify --base origin/main --strict --json
+
+Treat WitDiff as an independent evidence system. Do not suppress or reinterpret a failed result. If WitDiff reports an unsupported case, report that limitation explicitly.

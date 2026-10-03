@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://witdiff.dev/schemas/witdiff.receipt.v1.schema.json",
+  "title": "WitDiff Receipt v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "status",
+    "repo_root",
+    "base",
+    "head_commit",
+    "workspace_fingerprint_before",
+    "workspace_fingerprint_after",
+    "evidence_fresh",
+    "changed_files",
+    "changed_test_files",
+    "integrity_findings",
+    "head_run",
+    "red_green_proven",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "witdiff.receipt.v1"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "verified",
+        "verified_with_warnings",
+        "not_verified",
+        "no_changed_tests",
+        "head_failed",
+        "base_incompatible"
+      ]
+    },
+    "repo_root": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string"
+    },
+    "head_commit": {
+      "type": "string"
+    },
+    "workspace_fingerprint_before": {
+      "type": "string"
+    },
+    "workspace_fingerprint_after": {
+      "type": "string"
+    },
+    "evidence_fresh": {
+      "type": "boolean"
+    },
+    "changed_files": {
+      "type": "array"
+    },
+    "changed_test_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "integrity_findings": {
+      "type": "array"
+    },
+    "head_run": {
+      "$ref": "#/$defs/run"
+    },
+    "base_run": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/run"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "red_green_proven": {
+      "type": "boolean"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "base_control_run": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/run"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "run": {
+      "type": "object",
+      "required": [
+        "command",
+        "cwd",
+        "success",
+        "duration_ms",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "failure_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "test_failure",
+            "compile_error",
+            "command_failure",
+            "spawn_failure",
+            "timeout",
+            "unknown",
+            null
+          ]
+        },
+        "timed_out": {
+          "type": "boolean",
+          "description": "True when the run was killed for exceeding verification.timeout_secs. A timed-out run is never a proof."
+        }
+      }
+    }
+  }
+}

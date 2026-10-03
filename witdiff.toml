@@ -1,0 +1,35 @@
+[project]
+language = "rust"
+
+[verification]
+# Leave unset to auto-detect origin/main, main, origin/master, master, then HEAD~1.
+# base = "origin/main"
+
+test_command = ["cargo", "test", "--all-targets", "--all-features"]
+
+# WitDiff v0.1 treats these as dedicated regression-test files that can be
+# transplanted onto the base revision without also transplanting production code.
+test_globs = [
+  "tests/*.rs",
+  "tests/**/*.rs",
+  "**/tests/*.rs",
+  "**/tests/**/*.rs",
+  "**/*_test.rs",
+  "**/test_*.rs",
+]
+
+# Additional repository-relative directories that contain dedicated tests.
+extra_test_paths = []
+
+# When true, high-severity test-integrity findings prevent an exact VERIFIED status.
+block_on_integrity_findings = true
+
+# Max stdout/stderr bytes retained per test run in the JSON receipt.
+max_output_bytes = 16384
+
+# Wall-clock deadline in seconds for each individual test command run.
+# On expiry the command is killed and recorded as timed_out with
+# failure_kind = "timeout", which never satisfies a proof. A hung suite is a
+# fact about the candidate, not a WitDiff malfunction, so it is reported
+# rather than allowed to block. Remove the key to disable the deadline.
+timeout_secs = 900

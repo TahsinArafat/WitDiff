@@ -1,0 +1,16 @@
+pub mod config;
+pub mod git;
+pub mod integrity;
+pub mod model;
+pub mod runner;
+pub mod verify;
+
+pub use config::Config;
+pub use git::{GitRepo, WorktreeGuard};
+pub use model::*;
+pub use runner::CommandSpec;
+pub use verify::{inspect_repository, verify_repository, VerifyOptions};
+
+/// Convenience alias so downstream crates and tests do not need to depend on
+/// `anyhow` directly just to name the error type of a fallible core operation.
+pub type Result<T> = anyhow::Result<T>;
