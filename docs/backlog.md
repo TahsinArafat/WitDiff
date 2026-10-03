@@ -161,7 +161,8 @@ existed still parses.
 
 ### PG-401/402/403: pytest, Vitest/Jest, Go adapters
 
-Status: failure classification done (ADR-0012); targeted invocation not started.
+Status: failure classification done (ADR-0012) and Python structural integrity
+analysis done (ADR-0016). Targeted invocation not started.
 
 The backlog described each adapter as owning discovery, failure classification,
 targeted invocation and fingerprint additions. Only classification was built,
@@ -178,7 +179,8 @@ Still open:
 
 - targeted invocation for non-Rust frameworks, so a narrowed run is possible
   where the framework supports it;
-- structure-aware test-integrity analysis (ADR-0006) for other languages;
+- structure-aware test-integrity analysis for Go and JavaScript, which now
+  exists for Rust (ADR-0006) and Python (ADR-0016);
 - mutation operators (ADR-0011) for other languages.
 
 Until those exist, a non-Rust repository gets a red/green proof and a

@@ -2,8 +2,8 @@
 
 Not sure whether your language is covered? Read the
 [support matrix](support-matrix.md) first. The red/green proof works for Rust,
-Python, Go and JavaScript; structural integrity analysis and mutation are
-Rust-only.
+Python, Go and JavaScript; structural test-integrity analysis works for Rust and
+Python; mutation analysis is Rust-only.
 
 ## Build
 

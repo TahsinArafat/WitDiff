@@ -4,7 +4,7 @@
 
 WitDiff is a verification layer for coding agents and humans. It does not generate code and it does not decide whether code is correct by asking an LLM. Instead, it produces executable evidence that a change is actually supported by the tests that accompany it.
 
-The **red/green proof** works for Rust, Python (pytest), Go and JavaScript/TypeScript (Jest, Vitest). Structural test-integrity analysis and changed-code mutation are **Rust-only** today. See the [support matrix](docs/support-matrix.md) for exactly what is and is not covered per language, including the limitations, before adopting it for a non-Rust project.
+The **red/green proof** works for Rust, Python (pytest), Go and JavaScript/TypeScript (Jest, Vitest). **Structural test-integrity analysis** works for Rust and Python: it warns when a change weakens its own tests, such as `assert result == expected` becoming `assert result`. Mutation analysis is Rust-only. See the [support matrix](docs/support-matrix.md) for exactly what is and is not covered per language before adopting it for a non-Rust project.
 
 The v0.1 proof is intentionally narrow and useful:
 

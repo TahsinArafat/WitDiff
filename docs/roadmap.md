@@ -63,7 +63,7 @@ Mutation is opt-in (`verification.mutation`) and supplementary: it never changes
 
 ## M4 — language adapters
 
-- [x] pytest
+- [x] pytest (failure classification and structural integrity analysis)
 - [x] Vitest/Jest
 - [x] Go test
 - [x] test framework capability trait (classification and optional targeted invocation)

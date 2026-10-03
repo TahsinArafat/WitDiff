@@ -6,6 +6,8 @@ pub mod integrity;
 pub mod model;
 pub mod mutation;
 pub mod mutation_runner;
+pub mod pyanalysis;
+pub mod pyscript;
 pub mod runner;
 pub mod rustanalysis;
 pub mod selection;

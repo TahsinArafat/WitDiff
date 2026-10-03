@@ -104,7 +104,7 @@ pub fn verify_repository(
 
     let before = repo.workspace_fingerprint(&base)?;
     let inputs_before = repo.fingerprint_inputs(&base)?;
-    let integrity_findings = collect_integrity(repo, &base, &inspect)?;
+    let integrity_findings = collect_integrity(repo, &base, &inspect, config)?;
 
     let timeout = config.verification.timeout_secs.map(Duration::from_secs);
     let framework = config.verification.framework()?;
@@ -606,8 +606,18 @@ fn collect_integrity(
     repo: &GitRepo,
     base: &str,
     inspect: &InspectReport,
+    config: &Config,
 ) -> Result<Vec<IntegrityFinding>> {
     let mut findings = Vec::new();
+
+    // Derived once from the project's own test command, so the analysis runs
+    // under the interpreter the project tests with (ADR-0016). `None` means
+    // the command does not name a Python interpreter, which is reported per
+    // file rather than guessed at.
+    let python_interpreter = crate::pyanalysis::Interpreter::from_test_command(
+        &config.verification.test_command,
+        repo.root(),
+    );
     for path in &inspect.changed_test_files {
         let tracked = inspect
             .changed_files
@@ -615,6 +625,49 @@ fn collect_integrity(
             .find(|file| file.path == *path)
             .map(|file| file.tracked)
             .unwrap_or(true);
+
+        // Python test files get structural analysis too (ADR-0016), using the
+        // interpreter the project's own test command names. This is what closes
+        // the gap the support matrix recorded: measured, a test weakened from
+        // `assert is_even(3)` to `assert True` was previously reported
+        // `verified` with zero integrity findings.
+        if path.ends_with(".py") {
+            if let Some(interpreter) = &python_interpreter {
+                let head_path = repo.root().join(path);
+                let base_source = if tracked {
+                    repo.show_file_at(base, path)?
+                } else {
+                    None
+                };
+                findings.extend(crate::pyanalysis::analyze_python_test_change(
+                    path,
+                    interpreter,
+                    &head_path,
+                    base_source.as_deref(),
+                ));
+                continue;
+            }
+            // No Python interpreter could be determined from the test command,
+            // so the file cannot be analyzed structurally. Say so rather than
+            // falling through to a fallback that matches Rust syntax only and
+            // would silently produce nothing.
+            let from_configured = config
+                .verification
+                .test_command
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "(none)".to_owned());
+            findings.push(IntegrityFinding {
+                severity: Severity::Info,
+                path: path.clone(),
+                line: "0".into(),
+                rule: "test_source_unparsable".into(),
+                message: format!(
+                    "this Python test file was not analyzed structurally, because no Python interpreter could be determined from the configured test command (`{from_configured}`). The red/green proof is unaffected; test-weakening findings are not available for this file."
+                ),
+            });
+            continue;
+        }
 
         if path.ends_with(".rs") {
             let head_source = fs::read_to_string(repo.root().join(path))

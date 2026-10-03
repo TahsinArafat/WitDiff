@@ -21,7 +21,7 @@ Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
 | **Red/green proof** | yes | yes | yes | yes |
 | Failure classification | yes | yes | yes | yes |
 | Compile-error vs test-failure | yes | yes | yes | yes |
-| **Integrity findings (structural)** | yes | no | no | no |
+| **Integrity findings (structural)** | yes | **yes** | no | no |
 | **Integrity findings (line-based)** | yes | no | no | no |
 | Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a |
 | **Mutation analysis** | yes | no | no | no |
@@ -53,23 +53,41 @@ Vitest output. It has **not** been verified end to end against a real runner in
 this environment, because neither is installed. Treat it as tested but not
 proven until someone runs it.
 
-## The honest gap: weakened tests are not detected outside Rust
+## Python structural analysis (ADR-0016)
 
-This is the most important limitation to understand before adopting WitDiff for
-a non-Rust project.
+Python test files are analyzed structurally, using the interpreter named by the
+project's own test command. The rules mirror Rust so a reader learns one model:
+`removed_assertion`, `weakened_assertion`, `changed_expected_value`,
+`trivial_assertion`, `removed_test`, `skipped_test`.
 
-Measured on a Python repository: a test was changed from `assert is_even(3)` to
-`assert True`, alongside a genuine bug fix. WitDiff reported:
+This closed the gap recorded here previously. Measured before the work, a test
+changed from `assert is_even(3)` to `assert True` alongside a real bug fix
+produced `verified` with zero findings. It now produces:
 
 ```text
-status           : verified
-red_green_proven : true
-integrity_findings: 0
+status    : not_verified
+integrity : 2 finding(s), 2 high severity
+  high test_a.py [trivial_assertion]  test `test_odd` contains an assertion that cannot fail
+  high test_a.py [removed_assertion]  an assertion was removed from test `test_odd`
 ```
 
-The red/green proof was correct — the *other* test in the file did fail on base
-— so `verified` is not a false claim about the proof. But the gutted assertion
-was not reported at all.
+Reformatting still produces no finding: the analyzer compares normalized
+structure, not text, so `assert f() == 1` and `assert f()  ==  1` are identical.
+
+Two limitations to know:
+
+- The interpreter must be discoverable from the test command. A command that
+  hides it (a wrapper script, `uv run`, a container entrypoint) yields an
+  explicit `test_source_unparsable` finding saying the file was not analyzed,
+  rather than silent silence or a wrong guess.
+- Python's `assert` is compiled out under `python -O`. WitDiff analyzes the
+  source, so it reports what the test says rather than what a particular
+  interpreter invocation would execute.
+
+## Still not detected: Go and JavaScript
+
+For Go and JavaScript, WitDiff produces **no integrity findings in either
+direction** — it does not warn incorrectly, and it does not warn at all.
 
 The cause is concrete: the line-based fallback matches Rust macro syntax only.
 
@@ -77,21 +95,9 @@ The cause is concrete: the line-based fallback matches Rust macro syntax only.
 ["assert!(", "assert_eq!(", "assert_ne!(", "debug_assert!(", "debug_assert_eq!("]
 ```
 
-Python's `assert x`, Go's `if got != want { t.Errorf(...) }`, and Jest's
-`expect(x).toBe(y)` match none of those. So for non-Rust files WitDiff produces
-**no integrity findings in either direction** — it does not warn incorrectly,
-and it does not warn at all.
-
-What this means in practice:
-
-- You still get the core value: a real proof that the changed tests fail without
-  the change.
-- You do not get warned when a change also weakens its tests. A reviewer or
-  agent must notice that themselves.
-
-For Rust, the structural analyzer (ADR-0006) catches this, along with changed
-expected values, removed `match` arms, newly ignored tests and trivial
-assertions.
+Go's `if got != want { t.Errorf(...) }` and Jest's `expect(x).toBe(y)` match none
+of those. So for those languages you get the proof but not the test-weakening
+warnings, and a reviewer or agent must notice weakening themselves.
 
 ## What is not supported anywhere
 

@@ -2,7 +2,7 @@
 
 This file is the authoritative entry point for coding agents working in this repository. Read it before editing code. Then read `docs/product.md`, `docs/architecture.md`, and `docs/verification-model.md`.
 
-For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis and mutation are Rust-only, and that the line-based fallback matches Rust syntax exclusively.
+For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis works for Rust and Python, that Go and JavaScript have none, and that the line-based fallback matches Rust syntax exclusively.
 
 ## Mission
 
@@ -77,7 +77,8 @@ Read `docs/roadmap.md`. High-value tasks currently are:
 1. resolving `let` bindings so a rebound subject is not reported as a removal;
 2. removed-error-check detection in the structural analyzer;
 3. the remaining mutation operators (condition negation, numeric return substitution);
-4. targeted invocation and structural integrity analysis for the non-Rust adapters (ADR-0012);
+4. structural integrity analysis for Go and JavaScript, following the shape of
+   ADR-0016 (Python) and ADR-0006 (Rust);
 5. the signed-receipt prerequisites in ADR-0015: a content digest over the
    verified inputs, then a checkable binding from receipt to revision. Key
    management is an open question and must be settled before implementation;
