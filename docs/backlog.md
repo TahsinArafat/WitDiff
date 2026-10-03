@@ -198,7 +198,22 @@ restores the previous fail-on-everything behavior.
 
 ### PG-501: generic MCP server
 
-Thin protocol wrapper. It may expose `inspect`, `verify`, and `receipt`; it must call `witdiff-core` and must not create an alternative verification implementation.
+Status: done (ADR-0014). `crates/witdiff-mcp` serves `witdiff_inspect`,
+`witdiff_verify` and `witdiff_receipt` over newline-delimited JSON-RPC 2.0 on
+stdio, calling `witdiff-core` directly. It returns the receipt unchanged rather
+than re-rendering it, and takes its gate verdict from `VerificationStatus::gate`,
+so MCP cannot disagree with the CLI or CI.
+
+The official Rust SDK (`rmcp`) was evaluated and rejected: version 3 requires
+rustc 1.88 against this workspace's 1.78, so cargo silently substitutes version
+2, and it pulls 68 packages including an async runtime. It also could not be
+compiled in the development environment, and shipping a dependency whose
+behavior was never observed is the failure this project exists to detect.
+
+Implemented scope: `initialize`, `tools/list`, `tools/call`, `ping`. Everything
+else returns `Method not found` rather than silence, so a client is told
+plainly. Tool failures are results with `isError: true`, never protocol errors,
+because a protocol error is invisible to the model.
 
 ### PG-502: GitHub check annotations
 

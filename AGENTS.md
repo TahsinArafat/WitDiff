@@ -76,13 +76,13 @@ Read `docs/roadmap.md`. High-value tasks currently are:
 2. removed-error-check detection in the structural analyzer;
 3. the remaining mutation operators (condition negation, numeric return substitution);
 4. targeted invocation and structural integrity analysis for the non-Rust adapters (ADR-0012);
-5. MCP wrapper only after the CLI/receipt contract is stable;
-6. signed receipts, which PG-503 requires be designed before implementation.
+5. signed receipts, which PG-503 requires be designed before implementation.
 
 Integration tests, syntax-aware integrity analysis including `match`-arm
 comparison, targeted test selection, inline `#[cfg(test)]` transplantation
 (ADR-0010), changed-code mutation (ADR-0011), framework-specific failure
-classification (ADR-0012), and CI gating with annotations (ADR-0013) are done;
+classification (ADR-0012), CI gating with annotations (ADR-0013), and the MCP
+server (ADR-0014) are done;
 see `docs/roadmap.md` for what shipped.
 
 ## What not to build yet

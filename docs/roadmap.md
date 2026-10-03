@@ -82,7 +82,7 @@ and mutation, which remain Rust-only.
 - [x] GitHub Actions reusable workflow (`.github/workflows/witdiff.yml`)
 - [x] PR annotations/check summary (`--github-annotations`; see ADR-0013)
 - [x] universal agent skill/instruction package (`examples/agent-instruction.txt`)
-- [ ] MCP server wrapping core methods
+- [x] MCP server wrapping core methods (`crates/witdiff-mcp`, ADR-0014)
 - [ ] signed/attested receipts
 
 CI gating treats "nothing to prove" as distinct from "the proof failed", so a

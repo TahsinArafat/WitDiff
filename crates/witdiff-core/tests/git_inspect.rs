@@ -219,3 +219,32 @@ fn reported_paths_are_never_silently_mangled() {
         report.changed_test_files
     );
 }
+
+/// Regression: `git rev-parse --verify <ref>` prints the resolved hash, and a
+/// command run with `.status()` inherits stdout, so the hash landed in the
+/// parent's output. Every `witdiff verify` therefore emitted a bare commit hash
+/// before its own output, which made `--json` unparseable for any consumer.
+///
+/// The child's stdout must be captured, so nothing it prints can reach ours.
+#[test]
+fn git_commands_do_not_leak_their_stdout_to_the_caller() {
+    let repo = Repo::new();
+    let git_repo = GitRepo::discover(&repo.path).unwrap();
+    // `ref_exists` is the status-only check whose `git rev-parse` printed the
+    // hash; `git_status` now captures output instead of inheriting it.
+    assert!(
+        git_repo.ref_exists("HEAD"),
+        "HEAD must resolve in a repository with one commit"
+    );
+    assert!(
+        !git_repo.ref_exists("refs/heads/does-not-exist"),
+        "a missing ref must report false rather than leaking a git error"
+    );
+    assert!(
+        git_repo
+            .show_file_at("HEAD", "src/lib.rs")
+            .unwrap()
+            .is_some(),
+        "reading a file at a revision must still work"
+    );
+}

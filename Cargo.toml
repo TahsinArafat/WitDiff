@@ -2,6 +2,7 @@
 members = [
   "crates/witdiff-core",
   "crates/witdiff-cli",
+  "crates/witdiff-mcp",
 ]
 resolver = "2"
 

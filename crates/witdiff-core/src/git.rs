@@ -554,14 +554,21 @@ impl GitRepo {
         Ok(output.stdout)
     }
 
+    /// Run a git command for its exit status only.
+    ///
+    /// Uses `.output()` rather than `.status()` deliberately. `.status()`
+    /// inherits the parent's stdout, and `git rev-parse --verify <ref>` prints
+    /// the resolved commit hash there — so every verification emitted a stray
+    /// hash on stdout before its own output, which corrupted `--json` and any
+    /// machine consumer reading the stream.
     fn git_status<const N: usize>(&self, args: [&str; N]) -> Result<bool> {
-        let status = Command::new("git")
+        let output = Command::new("git")
             .arg("-C")
             .arg(&self.root)
             .args(args)
-            .status()
+            .output()
             .context("failed to launch git")?;
-        Ok(status.success())
+        Ok(output.status.success())
     }
 }
 

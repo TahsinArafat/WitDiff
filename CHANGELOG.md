@@ -4,6 +4,26 @@
 
 ### Added
 
+- **MCP server** (`crates/witdiff-mcp`, ADR-0014) exposing `witdiff_inspect`,
+  `witdiff_verify` and `witdiff_receipt` over newline-delimited JSON-RPC 2.0 on
+  stdio. It calls `witdiff-core` directly, returns the receipt unchanged, and
+  takes its gate verdict from the same `VerificationStatus::gate` the CLI and CI
+  use, so the three cannot disagree. Zero new dependencies: the protocol subset
+  is implemented over `serde_json` because the official SDK requires rustc 1.88
+  against this workspace's 1.78 and pulls 68 packages.
+
+### Fixed
+
+- **`witdiff verify --json` emitted a stray commit hash, making its output
+  unparseable.** `git_status` used `.status()`, which inherits the parent's
+  stdout, and `git rev-parse --verify <ref>` prints the resolved hash there. So
+  every verification wrote a bare hash before its own output, corrupting the
+  JSON stream for any machine consumer. The child's stdout is now captured.
+
+  This was latent since 0.1 and was found by the MCP transport, where a single
+  stray line desynchronizes the protocol stream and the failure is immediate
+  rather than subtle.
+
 - **GitHub Actions integration**: a reusable workflow
   (`.github/workflows/witdiff.yml`) and `--github-annotations`, which emits
   workflow commands for the status and every integrity finding. Escaping is done

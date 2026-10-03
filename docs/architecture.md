@@ -86,7 +86,7 @@ The test command is stored as an argument vector, not a shell script. This avoid
 Add a new crate only when a stable boundary appears. Likely future boundaries:
 
 - `witdiff-mutate`: mutation operators and orchestration;
-- `witdiff-mcp`: protocol adapter only;
+- `witdiff-mcp`: protocol adapter only (implemented; see ADR-0014);
 - `witdiff-adapter-*`: language/test-runner integration if dependencies justify isolation.
 
 Do not split the repository simply to imitate a large architecture.

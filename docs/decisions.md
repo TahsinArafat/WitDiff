@@ -16,3 +16,4 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0011: mutation is a supplementary signal, never a proof
 - ADR-0012: failure classification is framework-specific and explicitly selected
 - ADR-0013: CI gating distinguishes "nothing to prove" from "proof failed"
+- ADR-0014: the MCP server is a hand-written stdio adapter, not an SDK client
