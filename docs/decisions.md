@@ -20,3 +20,4 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0015: a signed receipt can attest a run, not a revision (proposed; not
   implemented)
 - ADR-0016: Python integrity analysis uses the interpreter's own AST
+- ADR-0017: Go integrity analysis uses `go/ast`, behind a shared rule engine

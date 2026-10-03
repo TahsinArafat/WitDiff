@@ -150,6 +150,34 @@ Which statuses pass is deliberately not "everything except `verified`":
 The policy lives in `VerificationStatus::gate`, not in a workflow file, so every
 consumer — CI, an MCP client, a local script — reaches the same verdict.
 
+## Rules that fire on legitimate work
+
+Some findings are ambiguous by nature, and WitDiff reports them rather than
+guessing. Knowing which ones saves a confusing first encounter.
+
+`changed_expected_value` fires whenever a comparison's expectation changes,
+including when the implementation changed and the expectation was correctly
+updated to match. Verified: fixing `add` from subtraction to addition and
+updating `assert_eq!(add(3, 1), 2)` to `..., 4)` reports the rule, in Go and in
+Rust alike.
+
+WitDiff cannot distinguish "the expectation was updated because the behavior was
+correctly fixed" from "the expectation was edited to make a failing test pass".
+Both are a changed expectation, and the tool has no way to know which. It
+reports, and a human decides.
+
+This is deliberate. Silently accepting changed expectations would let the
+second case through, which is the failure the rule exists to catch. The cost is
+that a legitimate fix accompanied by a test update produces a finding.
+
+Two ways to handle it:
+
+- Set `block_on_integrity_findings = false` and read the findings as advisory.
+  The receipt still records them, so nothing is hidden.
+- Split the change: land the implementation fix first, then the test update. The
+  second commit has no expectation change relative to the first, so no finding
+  is produced.
+
 ## Framework classification
 
 Whether the base experiment proves anything depends on classifying *why* it

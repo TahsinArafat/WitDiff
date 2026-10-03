@@ -21,7 +21,7 @@ Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
 | **Red/green proof** | yes | yes | yes | yes |
 | Failure classification | yes | yes | yes | yes |
 | Compile-error vs test-failure | yes | yes | yes | yes |
-| **Integrity findings (structural)** | yes | **yes** | no | no |
+| **Integrity findings (structural)** | yes | yes | **yes** | no |
 | **Integrity findings (line-based)** | yes | no | no | no |
 | Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a |
 | **Mutation analysis** | yes | no | no | no |
@@ -84,20 +84,87 @@ Two limitations to know:
   source, so it reports what the test says rather than what a particular
   interpreter invocation would execute.
 
-## Still not detected: Go and JavaScript
+## Go structural analysis (ADR-0017)
 
-For Go and JavaScript, WitDiff produces **no integrity findings in either
-direction** — it does not warn incorrectly, and it does not warn at all.
+Go test files are analyzed with `go/ast` from the standard library, run through
+`go run` over an embedded script. The rules are the same as Python and Rust,
+because all three share one comparison engine ([`testshape`]), so a fix to the
+pairing logic cannot be applied to only some languages.
 
-The cause is concrete: the line-based fallback matches Rust macro syntax only.
+Go has no assertion keyword, which shapes the analysis. A Go test fails by
+calling `t.Errorf` or `t.Fatalf`, and what matters is the condition guarding the
+call:
+
+```go
+if got != want {          // this is the assertion
+    t.Errorf("got %d", got)
+}
+```
+
+The failure message is not the assertion. Verified end to end: rewording
+`t.Errorf("got %d", ...)` to `t.Errorf("addition is wrong: %d", ...)` produces no
+finding, because comparing messages would report a reworded message as a changed
+expectation and would miss an inverted condition entirely.
+
+Detected: `removed_assertion` (including the Go-specific case of a test whose
+guard was deleted so it asserts nothing), `weakened_assertion`,
+`changed_expected_value`, `trivial_assertion`, `removed_test`, `skipped_test`.
+
+`t.Skip` is the Go form of an ignored test and is reported only when newly
+added, so a pre-existing skip does not flood every receipt that touches the
+file.
+
+## Still not detected: JavaScript
+
+For JavaScript and TypeScript, WitDiff produces **no integrity findings in
+either direction** — it does not warn incorrectly, and it does not warn at all.
+
+The reason is concrete rather than an omission. Node has **no built-in
+JavaScript parser** exposing an AST: `vm.SourceTextModule` is unavailable
+without a flag, and there is no `acorn` or `typescript` in a bare Node install.
+Checked directly on this machine. The parser would have to come from the
+project's own `node_modules`, which is present in a project that has Jest or
+Vitest installed but absent otherwise.
+
+That makes JavaScript genuinely different from Python and Go, where the parser
+ships with the runtime and is therefore always available in a project that can
+run its own tests. Adding JS analysis means either depending on the project
+having a parser installed, or shipping one, and neither is decided yet.
+
+Until then, a reviewer or agent must notice test weakening in JS themselves.
+
+## Other languages: assessment, not support
+
+These were checked directly on this machine. None is supported; the point is to
+record what each would actually require, so a future decision is informed rather
+than guessed.
+
+| Language | Parser available without extra install? | What it would take |
+| --- | --- | --- |
+| **TypeScript** | No — needs `typescript` in `node_modules` | Same problem as JavaScript. A TS project using Vitest does have `typescript` installed, so this is more tractable than plain JS |
+| **PHP** | Partially — `token_get_all` always ships; `ext-ast` does not | The tokenizer gives tokens, not a tree. Enough for line-based rules, not for the structural comparison the other languages get |
+| **Java** | Yes — `jdk.compiler` exposes `JavacTask` AST from the JDK | Feasible, mirroring Go: a small Java program run through the JDK that is already required to compile the project |
+| **.NET / C#** | Yes — Roslyn ships with the SDK | Feasible in principle, but Roslyn is a large API and the analysis would likely need a helper project rather than a single script |
+| **Ruby** | Yes — `ripper` ships in the standard library | Feasible, mirroring Go. Minitest and RSpec assertions differ in shape |
+| **ASP / ASP.NET** | n/a | A framework, not a test language. ASP.NET tests are xUnit/NUnit/MSTest, which are C# and covered by the .NET row |
+
+The two cheapest additions on this evidence are **Java** and **Ruby**, because
+both ship a parser with the runtime that is already required to run the tests —
+the same property that made Python and Go tractable at zero dependency cost.
+
+### The line-based fallback
+
+The fallback that exists for unparsable Rust files matches Rust macro syntax
+only:
 
 ```rust
 ["assert!(", "assert_eq!(", "assert_ne!(", "debug_assert!(", "debug_assert_eq!("]
 ```
 
-Go's `if got != want { t.Errorf(...) }` and Jest's `expect(x).toBe(y)` match none
-of those. So for those languages you get the proof but not the test-weakening
-warnings, and a reviewer or agent must notice weakening themselves.
+Confirmed directly: Python's `assert x`, Go's `t.Errorf` and Jest's
+`expect(x).toBe(y)` match none of those. It contributes nothing outside Rust,
+which is why each language gets real structural analysis rather than a widened
+pattern list.
 
 ## What is not supported anywhere
 

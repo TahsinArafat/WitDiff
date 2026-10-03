@@ -65,7 +65,7 @@ Mutation is opt-in (`verification.mutation`) and supplementary: it never changes
 
 - [x] pytest (failure classification and structural integrity analysis)
 - [x] Vitest/Jest
-- [x] Go test
+- [x] Go test (failure classification and structural integrity analysis)
 - [x] test framework capability trait (classification and optional targeted invocation)
 - [x] framework-specific failure classification
 

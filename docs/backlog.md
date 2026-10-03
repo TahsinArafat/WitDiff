@@ -179,8 +179,9 @@ Still open:
 
 - targeted invocation for non-Rust frameworks, so a narrowed run is possible
   where the framework supports it;
-- structure-aware test-integrity analysis for Go and JavaScript, which now
-  exists for Rust (ADR-0006) and Python (ADR-0016);
+- structure-aware test-integrity analysis for JavaScript, which now exists for
+  Rust (ADR-0006), Python (ADR-0016) and Go (ADR-0017). JavaScript needs its own
+  decision because Node ships no parser, unlike the other three runtimes;
 - mutation operators (ADR-0011) for other languages.
 
 Until those exist, a non-Rust repository gets a red/green proof and a

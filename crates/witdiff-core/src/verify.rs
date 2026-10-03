@@ -618,6 +618,12 @@ fn collect_integrity(
         &config.verification.test_command,
         repo.root(),
     );
+    // Same idea for Go (ADR-0017): the toolchain is the one the project tests
+    // with, so a repository that can run `go test` can run the analysis.
+    let go_toolchain = crate::goanalysis::GoToolchain::from_test_command(
+        &config.verification.test_command,
+        repo.root(),
+    );
     for path in &inspect.changed_test_files {
         let tracked = inspect
             .changed_files
@@ -625,6 +631,43 @@ fn collect_integrity(
             .find(|file| file.path == *path)
             .map(|file| file.tracked)
             .unwrap_or(true);
+
+        // Go test files get structural analysis (ADR-0017). Go has no
+        // assertion keyword, so the analyzer compares the condition guarding
+        // each failure call rather than the failure message.
+        if path.ends_with(".go") {
+            if let Some(toolchain) = &go_toolchain {
+                let head_path = repo.root().join(path);
+                let base_source = if tracked {
+                    repo.show_file_at(base, path)?
+                } else {
+                    None
+                };
+                findings.extend(crate::goanalysis::analyze_go_test_change(
+                    path,
+                    toolchain,
+                    &head_path,
+                    base_source.as_deref(),
+                ));
+                continue;
+            }
+            let from_configured = config
+                .verification
+                .test_command
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "(none)".to_owned());
+            findings.push(IntegrityFinding {
+                severity: Severity::Info,
+                path: path.clone(),
+                line: "0".into(),
+                rule: "test_source_unparsable".into(),
+                message: format!(
+                    "this Go test file was not analyzed structurally, because the Go toolchain could not be determined from the configured test command (`{from_configured}`). The red/green proof is unaffected; test-weakening findings are not available for this file."
+                ),
+            });
+            continue;
+        }
 
         // Python test files get structural analysis too (ADR-0016), using the
         // interpreter the project's own test command names. This is what closes

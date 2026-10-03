@@ -1,6 +1,8 @@
 pub mod config;
 pub mod framework;
 pub mod git;
+pub mod goanalysis;
+pub mod goscript;
 pub mod inline;
 pub mod integrity;
 pub mod model;
@@ -11,6 +13,7 @@ pub mod pyscript;
 pub mod runner;
 pub mod rustanalysis;
 pub mod selection;
+pub mod testshape;
 pub mod verify;
 
 pub use config::Config;
