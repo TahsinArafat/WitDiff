@@ -86,9 +86,21 @@ Use a Rust parser to identify changed functions/tests inside `#[cfg(test)]` modu
 
 ### PG-102: inline test transplantation
 
-Safely apply only test-module changes to base while excluding production changes from the same file.
+Status: designed, not implemented. ADR-0010 settles the mechanism as span
+splicing (`syn` locates the `#[cfg(test)]` module spans in head, those spans
+replace the corresponding base spans), with an explicit fallback to today's
+note-plus-`no_changed_tests` whenever a precondition fails.
 
-This is difficult; require an ADR before choosing AST rewrite vs patch-hunk reconstruction.
+The ADR rejects patch-hunk reconstruction on measured grounds: `git` forms hunks
+by proximity, so an adjacent production and test edit share one hunk and cannot
+be separated.
+
+Remaining work: implement splicing, add the receipt field recording that a file
+was spliced rather than copied, and add end-to-end tests for the preconditions
+(base unparsable, test module new in head, changed test outside any module,
+production change outside every module) plus the success path.
+
+Safely apply only test-module changes to base while excluding production changes from the same file.
 
 ### PG-103: targeted cargo test adapter
 

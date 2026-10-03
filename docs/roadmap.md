@@ -42,11 +42,12 @@ The roadmap is organized around proof quality, not feature count.
 - [x] detect weakened comparisons, changed expected values, removed match arms
 - [x] associate changed tests with test names
 - [x] run only changed tests where equivalence is safe
-- [ ] support inline `#[cfg(test)] mod tests` transplant safely
+- [ ] support inline `#[cfg(test)] mod tests` transplant safely — design settled
+  in ADR-0010 (span splicing with explicit fallbacks); not yet implemented
 
 See ADR-0006 (structural analysis), ADR-0007 (test-only transplant boundary),
-ADR-0008 (targeted selection refuses rather than approximates), and ADR-0009
-(NUL-delimited Git paths).
+ADR-0008 (targeted selection refuses rather than approximates), ADR-0009
+(NUL-delimited Git paths), and ADR-0010 (inline test transplant).
 
 ## M3 — changed-code mutation proof
 
