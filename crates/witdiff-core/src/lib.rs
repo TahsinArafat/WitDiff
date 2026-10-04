@@ -12,6 +12,8 @@ pub mod mutation;
 pub mod mutation_runner;
 pub mod pyanalysis;
 pub mod pyscript;
+pub mod rubyanalysis;
+pub mod rubyscript;
 pub mod runner;
 pub mod rustanalysis;
 pub mod selection;

@@ -21,7 +21,7 @@ Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
 | **Red/green proof** | yes | yes | yes | yes | yes | yes |
 | Failure classification | yes | yes | yes | yes | yes | yes |
 | Compile-error vs test-failure | yes | yes | yes | yes | yes | yes |
-| **Integrity findings (structural)** | yes | yes | yes | yes | no | no |
+| **Integrity findings (structural)** | yes | yes | yes | yes | **yes** | no |
 | Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a | n/a | n/a |
 | **Mutation analysis** | yes | no | no | no | no | no |
 | Targeted test selection | yes | no | no | no | no | no |
@@ -171,19 +171,23 @@ than guessed.
 | **.NET / C#** | Yes — Roslyn ships with the SDK | Feasible in principle, but Roslyn is a large API and the analysis would likely need a helper project rather than a single portable source file |
 | **ASP / ASP.NET** | n/a | A framework, not a test language. ASP.NET tests are xUnit/NUnit/MSTest, which are C# and covered by the .NET row |
 
-**Ruby is now the cheapest remaining addition.** Failure classification is
-done — Minitest and RSpec are recognized, verified against real output from the
-minitest that ships in Ruby's standard library — and `ripper` ships in the same
-standard library, so the integrity analysis would cost no dependency. It needs
-its own operator vocabulary, since `assert_equal` and RSpec's `expect(...).to`
-have different shapes from the four languages already supported.
+## Ruby structural analysis (ADR-0020)
 
-## Ruby: classification without analysis
+Ruby test files are analyzed with `ripper` from the standard library, so no gem
+and no install step is needed. Minitest's `assert_equal expected, actual` puts
+the expectation first, and the tool swaps it to the subject-first form the
+shared engine uses.
 
-Ruby has failure classification and `init` detection, but **no structural
-integrity analysis**. That is an unusual combination and worth stating plainly:
-a Ruby repository reaches `verified` and gets a correct proof, but no
-test-weakening findings.
+Detected: `removed_assertion`, `weakened_assertion`, `changed_expected_value`,
+`trivial_assertion`, `removed_test`, `skipped_test`, `removed_error_check`.
+Verified end to end that `assert_equal 2, add(1, 1)` becoming `assert true` is
+reported.
+
+**RSpec's `expect(x).to eq(y)` shape is not yet normalized.** RSpec is
+recognized for failure classification and by `init`, but the analyzer handles
+the Minitest-style `assert_*` and `refute_*` families. An RSpec file therefore
+produces few or no findings rather than wrong ones, and this is a real gap
+rather than an implied capability.
 
 Recognized output, verified against real runs:
 

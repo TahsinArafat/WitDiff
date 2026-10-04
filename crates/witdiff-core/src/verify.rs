@@ -714,6 +714,12 @@ fn collect_integrity(
         &config.verification.test_command,
         repo.root(),
     );
+    // Ruby too (ADR-0020). `ripper` ships with the interpreter, so a project
+    // that can run its tests can analyze them.
+    let ruby_toolchain = crate::rubyanalysis::RubyToolchain::from_test_command(
+        &config.verification.test_command,
+        repo.root(),
+    );
     for path in &inspect.changed_test_files {
         let tracked = inspect
             .changed_files
@@ -721,6 +727,43 @@ fn collect_integrity(
             .find(|file| file.path == *path)
             .map(|file| file.tracked)
             .unwrap_or(true);
+
+        // Ruby test files get structural analysis (ADR-0020). Minitest and
+        // RSpec declare `assert_equal expected, actual`, so the summary tool
+        // swaps the arguments to match the subject-first shared engine.
+        if path.ends_with(".rb") {
+            if let Some(toolchain) = &ruby_toolchain {
+                let head_path = repo.root().join(path);
+                let base_source = if tracked {
+                    repo.show_file_at(base, path)?
+                } else {
+                    None
+                };
+                findings.extend(crate::rubyanalysis::analyze_ruby_test_change(
+                    path,
+                    toolchain,
+                    &head_path,
+                    base_source.as_deref(),
+                ));
+                continue;
+            }
+            let from_configured = config
+                .verification
+                .test_command
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "(none)".to_owned());
+            findings.push(IntegrityFinding {
+                severity: Severity::Info,
+                path: path.clone(),
+                line: "0".into(),
+                rule: "test_source_unparsable".into(),
+                message: format!(
+                    "this Ruby test file was not analyzed structurally, because a Ruby interpreter could not be determined from the configured test command (`{from_configured}`). The red/green proof is unaffected; test-weakening findings are not available for this file."
+                ),
+            });
+            continue;
+        }
 
         // Java test files get structural analysis (ADR-0018). JUnit declares
         // assertEquals(expected, actual), so the summary tool swaps the
