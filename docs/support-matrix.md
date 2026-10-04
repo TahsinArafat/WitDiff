@@ -277,6 +277,27 @@ pattern list.
   implementation (ADR-0008); other frameworks run the full suite and the receipt
   says `full_suite`.
 
+## Known verification gaps
+
+Three things were **verified as far as this environment allowed, but not
+verified end to end against a real tool**. Each is a place a real bug could
+still hide. They are environment limits, not design decisions, and CI with real
+dependencies closes all three.
+
+| # | Not verified against | Verified instead by | Where | ADR |
+| --- | --- | --- | --- | --- |
+| 1 | a live **RSpec** run | `Ripper.sexp` output for every RSpec form, plus end-to-end analyzer tests over RSpec sources | Ruby: `expect(x).to eq(y)` and `.not.to` | ADR-0020 |
+| 2 | a real **`acorn`** / `@babel/parser` | the parser-absence contract (a project with no parser is reported), plus hand-written ESTree cases | JavaScript: parser resolution and `.not` | ADR-0021 |
+| 3 | **`ed25519-dalek`** | Node's built-in Ed25519, sign and verify exercised | signature over status and digest | ADR-0022 |
+
+Why each was blocked: `gem install` and cargo cache writes are denied in the
+development environment, and macOS ships LibreSSL, which does not implement
+Ed25519 at all.
+
+Task 2 is the one most likely to surface a real defect. Node resolves `require`
+from the *script's* directory rather than the working directory, so a nested
+`node_modules` and a `.ts`/`.tsx` file are the cases worth checking first.
+
 ## Adding a language
 
 Two steps, in this order:
