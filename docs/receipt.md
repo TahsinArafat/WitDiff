@@ -26,6 +26,29 @@ Changes made after the first release are additive and optional within
 before a field existed still deserializes, and each new field defaults to the
 value that matches how such receipts were actually produced.
 
+## The verification digest
+
+`verification_digest` identifies *which* code was verified. It covers the base
+and head revisions, the effective test command, and the content of the changed
+test files and the base production source.
+
+It is not the same as `workspace_fingerprint`, and the difference matters:
+
+| | `workspace_fingerprint` | `verification_digest` |
+| --- | --- | --- |
+| Answers | did anything move during the run? | which inputs were verified? |
+| On a clean tree | SHA-256 of the empty string | differs per content |
+| Changes when a test is edited | only if uncommitted changes exist | always |
+
+Measured: two repositories, one containing `f() -> 1` and the other
+`f() -> 999`, produce the identical fingerprint `e3b0c44298fc1c14` and different
+digests. So the fingerprint cannot distinguish one clean tree from another, and
+the digest can.
+
+Two receipts with the same `verification_digest` describe the same verified
+inputs. That is checkable without any key material, and it is what a signature
+would cover (ADR-0015).
+
 ## Staleness
 
 A receipt is a claim about a revision. Nothing stops the code changing

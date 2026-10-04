@@ -140,6 +140,13 @@
           "type": "null"
         }
       ]
+    },
+    "verification_digest": {
+      "description": "A digest over the material facts of this verification: the base and head revisions, the effective test command, and the content of the changed test files and base production source. Distinct from workspace_fingerprint, which detects movement during a run and is SHA-256 of the empty string on a clean tree; this identifies which code was verified, which is what a signature would need to cover (ADR-0015). Optional and additive.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "$defs": {

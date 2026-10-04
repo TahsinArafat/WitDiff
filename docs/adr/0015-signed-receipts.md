@@ -1,6 +1,6 @@
 # ADR-0015: Signed receipts — what a signature can and cannot attest
 
-Status: proposed
+Status: partially implemented — both prerequisites are done; the signature itself is deferred
 
 This ADR is a design document. It specifies a problem and a boundary, and
 deliberately does **not** commit to an implementation, because the remaining
@@ -72,8 +72,8 @@ anything useful.
 
 ### Prerequisite A: a content digest over the verified inputs
 
-Add a digest over the material facts of the verification, so a signature has
-something meaningful to cover. It must include at minimum:
+**Implemented** as `witdiff_core::digest`, recorded in the receipt as
+`verification_digest`. It covers:
 
 - the base and head revisions;
 - the exact test command that ran (`effective_test_command`);
@@ -81,33 +81,53 @@ something meaningful to cover. It must include at minimum:
   inline test module;
 - the production source that the base worktree received.
 
-This is distinct from `workspace_fingerprint` and must not replace it. They
+This is distinct from `workspace_fingerprint` and does not replace it. They
 answer different questions: the fingerprint detects movement during a run, the
 digest identifies the inputs. Conflating them is what made finding 2 surprising.
 
+Verified against the exact case that motivated this ADR. Two repositories, one
+containing `f() -> 1` and the other `f() -> 999`, produced the identical
+fingerprint `e3b0c44298fc1c14` — SHA-256 of the empty string — and **different**
+digests, `2e169c2ed4b285ec` and `fca5d3d63433c836`. The digest also changes for an
+uncommitted edit to a test file, which is the binding prerequisite B asks for.
+
 ### Prerequisite B: a binding from receipt to revision
 
-A receipt must state the revision it describes and be checkable against the
-working state. The existing `head_commit` is necessary but not sufficient: it is
-absent for uncommitted work, which is the normal case. The digest from A
-provides the checkable binding.
+**Implemented.** The digest covers the *content* of the changed test files at
+head and the base production source, so it binds a receipt to the working state
+rather than to a commit identifier. Measured: editing a test file without
+committing changed the digest from `2e169c2ed4b285ec` to `b48706b332d5df6b`,
+which `head_commit` alone could not have detected.
+
+`witdiff receipt` now checks it alongside the head commit and the fingerprint, so
+a receipt whose verified inputs have changed is reported stale even when the
+fingerprint matches — which it does for any content on a clean tree.
 
 ### Then, and only then, a signature
 
-The signature covers the digest and the status. It says: *the holder of key K
+**Not implemented, and deliberately so.** The prerequisites are met; the
+signature itself is not, because it rests on decisions this ADR does not settle.
+
+The signature would cover the digest and the status. It says: *the holder of key K
 attests that a WitDiff run with these inputs produced this status*. It does
 **not** say the code is correct, and the schema field name must not suggest that
 it does.
 
-Key management is explicitly out of scope for this ADR and must be decided
-separately before implementation. The open questions are real ones:
+Key management remains undecided and is the reason no signature ships. The open
+questions are real ones:
 
 - Is the key per-developer, per-repository, or per-CI-runner?
 - Where does the private key live, and what happens when it leaks?
 - Is the goal non-repudiation, or only tamper-evidence?
 
 Those have different answers and lead to different designs. Choosing a scheme
-now would be guessing.
+without an answer would be guessing, and a signature that reads as stronger
+evidence than it is would be worse than no signature — which is the same
+argument that deferred this in the first place.
+
+What *is* now possible: a consumer can compare `verification_digest` across two
+receipts to tell whether they describe the same code. That is tamper-evidence by
+comparison, available today and requiring no key material.
 
 ### Replay semantics
 

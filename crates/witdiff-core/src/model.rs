@@ -159,7 +159,15 @@ impl Receipt {
     /// The uncommitted case is the common one: a receipt written for a change,
     /// then the change edited, keeps the same `head_commit` while describing
     /// code that no longer exists.
-    pub fn freshness(&self, head_commit: &str, fingerprint: &str) -> ReceiptFreshness {
+    /// `digest` is the digest of the current inputs, checked when the receipt
+    /// carries one. Its absence is not a staleness reason on its own, so
+    /// receipts written before the digest existed still work.
+    pub fn freshness(
+        &self,
+        head_commit: &str,
+        fingerprint: &str,
+        digest: Option<&str>,
+    ) -> ReceiptFreshness {
         let mut reasons = Vec::new();
         if self.head_commit != head_commit {
             reasons.push(format!(
@@ -170,6 +178,17 @@ impl Receipt {
         }
         if self.workspace_fingerprint_after != fingerprint {
             reasons.push("the workspace has changed since the receipt was written".to_owned());
+        }
+        // A digest mismatch is the strongest signal: it means the verified
+        // inputs differ, even when the fingerprint happens to match. On a clean
+        // tree the fingerprint is identical for any content, so this catches
+        // what the other two checks cannot.
+        if let (Some(recorded), Some(current)) = (self.verification_digest.as_deref(), digest) {
+            if recorded != current {
+                reasons.push(
+                    "the verified inputs have changed since the receipt was written".to_owned(),
+                );
+            }
         }
         if reasons.is_empty() {
             ReceiptFreshness::Current
@@ -409,6 +428,17 @@ pub struct Receipt {
     /// "WitDiff did not try".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_inline_tests: Vec<RefusedInlineTests>,
+    /// A digest over the material facts of this verification: the base and head
+    /// revisions, the effective test command, and the content of the changed
+    /// test files and base production source.
+    ///
+    /// Distinct from `workspace_fingerprint`, which detects movement during a
+    /// run and is SHA-256 of the empty string on a clean tree. This identifies
+    /// *which* code was verified, which is what a signature needs to cover
+    /// (ADR-0015). Additive in v1 and optional, so receipts written before it
+    /// existed still parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_digest: Option<String>,
     /// Changed-code mutation evidence, when enabled.
     ///
     /// Supplementary only: this field never affects `status` (ADR-0011).
@@ -882,11 +912,11 @@ mod freshness_tests {
     fn an_unchanged_state_is_current() {
         let receipt = receipt_at("abc123", "fingerprint");
         assert_eq!(
-            receipt.freshness("abc123", "fingerprint"),
+            receipt.freshness("abc123", "fingerprint", None),
             ReceiptFreshness::Current
         );
         assert!(receipt
-            .freshness("abc123", "fingerprint")
+            .freshness("abc123", "fingerprint", None)
             .warning()
             .is_none());
     }
@@ -896,7 +926,7 @@ mod freshness_tests {
     #[test]
     fn an_uncommitted_edit_makes_a_receipt_stale() {
         let receipt = receipt_at("abc123", "fingerprint");
-        let freshness = receipt.freshness("abc123", "different");
+        let freshness = receipt.freshness("abc123", "different", None);
         assert!(!freshness.is_current());
         let warning = freshness.warning().expect("a stale receipt must warn");
         assert!(
@@ -909,7 +939,7 @@ mod freshness_tests {
     #[test]
     fn a_new_commit_makes_a_receipt_stale() {
         let receipt = receipt_at("abc123def456", "fingerprint");
-        let freshness = receipt.freshness("999888777666", "fingerprint");
+        let freshness = receipt.freshness("999888777666", "fingerprint", None);
         assert!(!freshness.is_current());
         let warning = freshness.warning().expect("a stale receipt must warn");
         assert!(
@@ -924,11 +954,53 @@ mod freshness_tests {
     fn both_signals_are_reported() {
         let receipt = receipt_at("abc123", "fingerprint");
         let warning = receipt
-            .freshness("different", "different")
+            .freshness("different", "different", None)
             .warning()
             .expect("stale");
         assert!(warning.contains("HEAD is now"), "got {warning}");
         assert!(warning.contains("workspace has changed"), "got {warning}");
+    }
+
+    /// The digest catches what the fingerprint cannot. On a clean tree the
+    /// fingerprint is identical for any content, so without this check a
+    /// receipt for one revision would look current in a repository containing
+    /// entirely different code — the finding that motivated ADR-0015.
+    #[test]
+    fn a_different_digest_makes_a_receipt_stale() {
+        let mut receipt = receipt_at("abc123", "fingerprint");
+        receipt.verification_digest = Some("digest-one".to_owned());
+
+        // Same head, same fingerprint, different content.
+        let freshness = receipt.freshness("abc123", "fingerprint", Some("digest-two"));
+        assert!(!freshness.is_current());
+        let warning = freshness.warning().expect("stale");
+        assert!(
+            warning.contains("verified inputs have changed"),
+            "the reason should name the inputs, got {warning}"
+        );
+    }
+
+    #[test]
+    fn a_matching_digest_stays_current() {
+        let mut receipt = receipt_at("abc123", "fingerprint");
+        receipt.verification_digest = Some("digest-one".to_owned());
+        assert_eq!(
+            receipt.freshness("abc123", "fingerprint", Some("digest-one")),
+            ReceiptFreshness::Current
+        );
+    }
+
+    /// A receipt written before the digest existed must still work: its absence
+    /// is not a staleness reason on its own.
+    #[test]
+    fn a_receipt_without_a_digest_is_not_stale_by_absence() {
+        let receipt = receipt_at("abc123", "fingerprint");
+        assert!(receipt.verification_digest.is_none());
+        assert_eq!(
+            receipt.freshness("abc123", "fingerprint", Some("anything")),
+            ReceiptFreshness::Current,
+            "an old receipt must not be reported stale merely for lacking a digest"
+        );
     }
 
     /// An unverifiable receipt must not be presented as though it were checked.

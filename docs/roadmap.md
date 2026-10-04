@@ -102,11 +102,8 @@ See `docs/support-matrix.md` for the per-language detail, including what Java,
 - [x] PR annotations/check summary (`--github-annotations`; see ADR-0013)
 - [x] universal agent skill/instruction package (`examples/agent-instruction.txt`)
 - [x] MCP server wrapping core methods (`crates/witdiff-mcp`, ADR-0014)
-- [ ] signed/attested receipts — **deliberately not implemented**. ADR-0015
-  designed it and concluded a signature over the receipt as currently shaped
-  would attest that a run happened, not which code was verified: on a clean tree
-  the workspace fingerprint is exactly SHA-256 of the empty string. Two
-  prerequisites must land first, and key management is an open question.
+- [x] content digest and revision binding for receipts (ADR-0015 prerequisites)
+- [ ] the signature itself, pending the key-management decision ADR-0015 records
 
 CI gating treats "nothing to prove" as distinct from "the proof failed", so a
 documentation-only pull request no longer fails the check. The policy lives in

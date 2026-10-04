@@ -79,9 +79,12 @@ Read `docs/roadmap.md`. High-value tasks currently are:
 1. RSpec's `expect(x).to` normalization for Ruby, and structural integrity
    analysis for JavaScript — the latter needs its own decision because Node
    ships no parser (see the support matrix);
-2. the signed-receipt prerequisites in ADR-0015: a content digest over the
-   verified inputs, then a checkable binding from receipt to revision. Key
-   management is an open question and must be settled before implementation.
+2. the signed-receipt **signature** itself. Both prerequisites from ADR-0015 are
+   done (`verification_digest`); what remains undecided is key management —
+   per-developer, per-repository or per-CI-runner — and whether the goal is
+   tamper-evidence or non-repudiation. Do not implement a signature before
+   answering those, because one that reads as stronger evidence than it is would
+   be worse than none.
 
 Integration tests, syntax-aware integrity analysis including `match`-arm
 comparison, targeted test selection, inline `#[cfg(test)]` transplantation

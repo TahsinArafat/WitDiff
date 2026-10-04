@@ -491,11 +491,37 @@ fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> 
     // A stored receipt is a claim about a revision, and nothing stops the code
     // changing afterwards. Checking is the difference between a reader knowing
     // the evidence is stale and having to notice a mismatched hash themselves.
+    // The current digest is recomputed from the same inputs the receipt
+    // recorded, so a mismatch means the verified content differs even when the
+    // fingerprint matches — which it does for any content on a clean tree.
+    let config = Config::load(repo.root())?;
+    let production_paths: Vec<String> = receipt
+        .changed_files
+        .iter()
+        .filter(|file| !file.is_test && !matches!(file.kind, witdiff_core::ChangeKind::Deleted))
+        .map(|file| file.path.clone())
+        .collect();
+    let current_digest = match repo.head_commit() {
+        Ok(head) => witdiff_core::digest::collect(
+            &repo,
+            &receipt.base,
+            &head,
+            &config.verification.test_command,
+            &receipt.changed_test_files,
+            &production_paths,
+        )
+        .ok()
+        .map(|digest| digest.as_str().to_owned()),
+        Err(_) => None,
+    };
+
     let freshness = match (
         repo.head_commit(),
         repo.workspace_fingerprint(&receipt.base),
     ) {
-        (Ok(head), Ok(fingerprint)) => receipt.freshness(&head, &fingerprint),
+        (Ok(head), Ok(fingerprint)) => {
+            receipt.freshness(&head, &fingerprint, current_digest.as_deref())
+        }
         (Err(error), _) | (_, Err(error)) => witdiff_core::model::ReceiptFreshness::Unknown {
             reason: format!("{error:#}"),
         },

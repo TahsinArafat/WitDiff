@@ -415,6 +415,34 @@ pub fn verify_repository(
         }
     }
 
+    // The digest identifies the verified inputs, which the workspace
+    // fingerprint cannot: on a clean tree the fingerprint is SHA-256 of the
+    // empty string (ADR-0015).
+    let production_paths: Vec<String> = inspect
+        .changed_files
+        .iter()
+        .filter(|file| !file.is_test && !matches!(file.kind, ChangeKind::Deleted))
+        .map(|file| file.path.clone())
+        .collect();
+    let verification_digest = crate::digest::collect(
+        repo,
+        &base,
+        &inspect.head_commit,
+        &command.as_vec(),
+        &inspect.changed_test_files,
+        &production_paths,
+    )
+    .map(|digest| digest.as_str().to_owned())
+    .map_err(|error| {
+        // A digest failure must not fail the verification, but it must not be
+        // silent either: a receipt without a digest cannot be attested.
+        notes.push(format!(
+            "the verification digest could not be computed: {error}; this receipt identifies no verified inputs"
+        ));
+        error
+    })
+    .ok();
+
     let after = repo.workspace_fingerprint(&base)?;
     let evidence_fresh = before == after;
     if !evidence_fresh {
@@ -488,6 +516,7 @@ pub fn verify_repository(
         effective_test_command,
         spliced_inline_tests,
         refused_inline_tests,
+        verification_digest,
         mutation,
     })
 }

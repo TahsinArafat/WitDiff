@@ -1,4 +1,5 @@
 pub mod config;
+pub mod digest;
 pub mod framework;
 pub mod git;
 pub mod goanalysis;
