@@ -8,6 +8,8 @@ pub mod inline;
 pub mod integrity;
 pub mod javaanalysis;
 pub mod javasummary;
+pub mod jsanalysis;
+pub mod jsscript;
 pub mod model;
 pub mod mutation;
 pub mod mutation_runner;

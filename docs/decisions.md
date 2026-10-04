@@ -27,3 +27,4 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0019: a missing toolchain is reported, and installed only from the
   project's own pin
 - ADR-0020: Ruby integrity analysis uses `ripper` from the standard library
+- ADR-0021: JavaScript integrity analysis uses the parser the project installs

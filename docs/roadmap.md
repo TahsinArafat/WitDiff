@@ -67,7 +67,7 @@ ADR-0011.
 - [x] Go test (failure classification and structural integrity analysis)
 - [x] Java / JUnit (failure classification and structural integrity analysis)
 - [x] Ruby / Minitest / RSpec (failure classification and structural integrity analysis)
-- [x] Vitest/Jest (failure classification only)
+- [x] Vitest/Jest (failure classification and structural integrity analysis)
 - [x] test framework capability trait (classification and optional targeted invocation)
 - [x] framework-specific failure classification
 
@@ -77,15 +77,12 @@ same pytest failure classified as `CommandFailure` and could not produce a proof
 at all.
 
 Structural integrity analysis exists for **Rust (ADR-0006), Python (ADR-0016),
-Go (ADR-0017) and Java (ADR-0018)**. It shares one rule engine
-(`witdiff_core::testshape`), so the languages cannot disagree about what a
-weakening is.
+Go (ADR-0017), Java (ADR-0018), Ruby (ADR-0020) and JavaScript/TypeScript
+(ADR-0021)**. All share one rule engine (`witdiff_core::testshape`), so no
+language can disagree about what a weakening is.
 
 Still open:
 
-- **JavaScript/TypeScript integrity analysis.** Node ships no parser, so this
-  needs its own decision rather than following the Go and Java shape; see the
-  support matrix.
 - **Targeted invocation** for non-Rust frameworks, so the full suite runs and
   the receipt says `full_suite`.
 - **Mutation** outside Rust; the operators are defined over Rust syntax.

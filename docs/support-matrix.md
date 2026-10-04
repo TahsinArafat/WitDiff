@@ -21,11 +21,14 @@ Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
 | **Red/green proof** | yes | yes | yes | yes | yes | yes |
 | Failure classification | yes | yes | yes | yes | yes | yes |
 | Compile-error vs test-failure | yes | yes | yes | yes | yes | yes |
-| **Integrity findings (structural)** | yes | yes | yes | yes | **yes** | no |
+| **Integrity findings (structural)** | yes | yes | yes | yes | **yes** | **yes*** |
 | Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a | n/a | n/a |
 | **Mutation analysis** | yes | no | no | no | no | no |
 | Targeted test selection | yes | no | no | no | no | no |
 | `init` project detection | yes | yes | yes | yes | yes | yes |
+
+JavaScript and TypeScript need a parser *in the project*, because Node ships
+none. A Jest or Vitest project already has one — see the section below.
 
 "n/a" means the concept does not apply: inline test modules are a Rust idiom.
 Python, Go and JavaScript keep tests in separate files, which the whole-file
@@ -139,24 +142,42 @@ Requirements: a **JDK**, not a bare JRE, because the analysis compiles the tool
 in memory. A JRE-only environment is reported explicitly rather than mistaken
 for a syntax error.
 
-## Still not detected: JavaScript
+## JavaScript and TypeScript (ADR-0021)
 
-For JavaScript and TypeScript, WitDiff produces **no integrity findings in
-either direction** — it does not warn incorrectly, and it does not warn at all.
+Node ships **no built-in parser**, so this is the one language whose parser comes
+from the project rather than the runtime. WitDiff tries `@babel/parser`, then
+`acorn`, then `typescript`, in that order — all produce an ESTree tree, so one
+traversal serves all three, and `typescript` also covers `.ts`/`.tsx`.
 
-The reason is concrete rather than an omission. Node has **no built-in
-JavaScript parser** exposing an AST: `vm.SourceTextModule` is unavailable
-without a flag, and there is no `acorn` or `typescript` in a bare Node install.
-Checked directly on this machine. The parser would have to come from the
-project's own `node_modules`, which is present in a project that has Jest or
-Vitest installed but absent otherwise.
+**The working directory is not enough.** Node resolves `require` relative to the
+script's own location, so a tool run from a temporary directory cannot see the
+project's `node_modules` even when its working directory is the project. The
+project path is passed explicitly and each parser is required by absolute path.
+This was a bug that nearly shipped.
 
-That makes JavaScript genuinely different from Python and Go, where the parser
-ships with the runtime and is therefore always available in a project that can
-run its own tests. Adding JS analysis means either depending on the project
-having a parser installed, or shipping one, and neither is decided yet.
+When no parser is present, the file is **reported as not analyzed**, naming the
+packages WitDiff looked for:
 
-Until then, a reviewer or agent must notice test weakening in JS themselves.
+```text
+warning a.test.js [test_source_unparsable] no JavaScript parser available;
+        install one of @babel/parser, acorn or typescript as a project dependency
+```
+
+It never falls back to a weaker analysis, because that is the failure the
+line-based fallback already demonstrates.
+
+`expect(x).toBe(y)` normalizes to the subject-first form the shared engine
+compares; `toBeTruthy`, `toContain` and the other predicate matchers constrain
+the subject alone, so they normalize to the subject; `.not.toBe(y)` normalizes
+as an inequality.
+
+**Not verified against a real parser here.** This development environment has no
+JavaScript parser and no way to install one, so the end-to-end path is verified
+through the parser-absence contract — that a project without a parser is
+reported, which is the branch that matters most — plus hand-written ESTree cases
+for the traversal. Those caught a real bug: `.not.toBe` nests one level deeper
+than `.toBe`, and reading the matcher without unwrapping returned nothing for
+every negated expectation. A run against real acorn in CI would close the gap.
 
 ## Other languages: assessment, not support
 

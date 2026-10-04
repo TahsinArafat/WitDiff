@@ -749,6 +749,12 @@ fn collect_integrity(
         &config.verification.test_command,
         repo.root(),
     );
+    // JavaScript too (ADR-0021). The parser comes from the project rather than
+    // from the runtime, so the working directory matters.
+    let js_toolchain = crate::jsanalysis::JsToolchain::from_test_command(
+        &config.verification.test_command,
+        repo.root(),
+    );
     for path in &inspect.changed_test_files {
         let tracked = inspect
             .changed_files
@@ -756,6 +762,50 @@ fn collect_integrity(
             .find(|file| file.path == *path)
             .map(|file| file.tracked)
             .unwrap_or(true);
+
+        // JavaScript and TypeScript test files get structural analysis
+        // (ADR-0021). The parser is required from the project, because Node
+        // ships none, so a project without one is reported rather than analyzed
+        // more weakly.
+        if path.ends_with(".js")
+            || path.ends_with(".jsx")
+            || path.ends_with(".ts")
+            || path.ends_with(".tsx")
+            || path.ends_with(".mjs")
+            || path.ends_with(".cjs")
+        {
+            if let Some(toolchain) = &js_toolchain {
+                let head_path = repo.root().join(path);
+                let base_source = if tracked {
+                    repo.show_file_at(base, path)?
+                } else {
+                    None
+                };
+                findings.extend(crate::jsanalysis::analyze_javascript_test_change(
+                    path,
+                    toolchain,
+                    &head_path,
+                    base_source.as_deref(),
+                ));
+                continue;
+            }
+            let from_configured = config
+                .verification
+                .test_command
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "(none)".to_owned());
+            findings.push(IntegrityFinding {
+                severity: Severity::Info,
+                path: path.clone(),
+                line: "0".into(),
+                rule: "test_source_unparsable".into(),
+                message: format!(
+                    "this JavaScript test file was not analyzed structurally, because Node was not determined from the configured test command (`{from_configured}`). The red/green proof is unaffected; test-weakening findings are not available for this file."
+                ),
+            });
+            continue;
+        }
 
         // Ruby test files get structural analysis (ADR-0020). Minitest and
         // RSpec declare `assert_equal expected, actual`, so the summary tool
