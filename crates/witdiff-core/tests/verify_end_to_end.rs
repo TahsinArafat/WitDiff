@@ -640,16 +640,24 @@ fn missing_test_program_does_not_leak_worktree() {
     fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
 
     let mut config = fixture_config();
-    // A program that cannot be spawned: `run` returns Err from the HEAD run, so
-    // no worktree is created yet -- then verify against a config whose HEAD
-    // passes but whose base run cannot spawn.
+    // A program that cannot be spawned. Since ADR-0019 this is reported in a
+    // receipt rather than returned as an error, so that integrity findings
+    // computed before the run are not discarded. The worktree invariant this
+    // test exists for is unchanged: nothing may leak.
     config.verification.test_command = vec!["witdiff-nonexistent-program".to_owned()];
 
     let repo = fixture.repo();
-    let result = verify_repository(&repo, &config, VerifyOptions::default());
+    let receipt = verify_repository(&repo, &config, VerifyOptions::default())
+        .expect("a missing program is reported in a receipt, not as an error");
+
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::NotVerified,
+        "no proof was attempted, so the status must not be verified"
+    );
     assert!(
-        result.is_err(),
-        "a missing test program must be an explicit error"
+        receipt.head_run.is_missing_program(),
+        "the receipt must record that the program was absent"
     );
 
     let worktrees = fixture.worktree_list();

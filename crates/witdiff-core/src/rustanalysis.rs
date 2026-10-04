@@ -104,6 +104,9 @@ struct TestFn {
     matches: Vec<MatchExpr>,
     /// True when the body contains no assertion at all.
     body_is_empty: bool,
+    /// Simple `let` bindings, used to resolve a rebound subject. See
+    /// [`TestBodyCollector::bindings`].
+    bindings: BTreeMap<String, String>,
 }
 
 /// The structure of one parsed revision of a test file.
@@ -261,42 +264,67 @@ pub fn analyze_rust_test_change(
             ));
         }
 
-        for removed in missing_assertions(base_test, head_test) {
-            // An assertion whose subject survived under a different form was
-            // rewritten, not deleted, and `weakening_findings` judges the
-            // rewrite on its own merits.
-            //
-            // A *predicate* that lost its exact counterpart is treated that way.
-            // An *exact* assertion is not: `assert_eq!(s, NotVerified)` is never
-            // silently satisfied by an unrelated `assert!(s != Verified)`
-            // sitting beside it, so its disappearance is always reported. The
-            // conservative direction matters more here than avoiding a
-            // double-counted finding.
-            let rewritten = !is_exact_macro(&removed.macro_name)
-                && head_test
-                    .assertions
-                    .iter()
-                    .any(|candidate| same_subject(&removed, candidate));
-            if rewritten {
-                continue;
+        // Resolution is scoped to this test's whole comparison, so a binding in
+        // one test cannot make an unrelated assertion look equivalent in
+        // another. The removal loop is inside the scope because its
+        // "was this rewritten?" check resolves the head subject through a
+        // binding; leaving it outside made the check silently ineffective.
+        let findings_here = with_bindings(&head_test.bindings, || {
+            let mut local: Vec<IntegrityFinding> = Vec::new();
+            for removed in missing_assertions(base_test, head_test) {
+                // An assertion whose subject survived under a different form was
+                // rewritten, not deleted, and `weakening_findings` judges the
+                // rewrite on its own merits.
+                //
+                // An *exact* assertion is only treated as rewritten when the
+                // head counterpart resolves to the identical subject through a
+                // `let` binding. That case is a pure refactor:
+                // `assert_eq!(compute(), 4)` becoming
+                // `let v = compute(); assert_eq!(v, 4)` asserts exactly the same
+                // thing. Without it, the refactor is a false positive, and
+                // because high-severity findings block verification it
+                // downgrades a genuinely proven change.
+                //
+                // Anything looser would be wrong: an exact assertion is never
+                // silently satisfied by an unrelated predicate beside it.
+                let rewritten = head_test.assertions.iter().any(|candidate| {
+                    if !same_subject(&removed, candidate) {
+                        return false;
+                    }
+                    if !is_exact_macro(&removed.macro_name) {
+                        return true;
+                    }
+                    let (Some(left), Some(right)) = (
+                        first_arg(&removed.arguments),
+                        first_arg(&candidate.arguments),
+                    ) else {
+                        return false;
+                    };
+                    left == right || resolve_binding(right).is_some_and(|resolved| resolved == left)
+                });
+                if rewritten {
+                    continue;
+                }
+                let verdict = match strength_of(&removed.macro_name, &removed.arguments) {
+                    Strength::Exact => "an exact assertion was removed",
+                    _ => "an assertion was removed",
+                };
+                local.push(finding(
+                    Severity::High,
+                    path,
+                    removed.line,
+                    "removed_assertion",
+                    format!(
+                        "{verdict} from test `{name}` (base line {}: {}({}))",
+                        removed.line, removed.macro_name, removed.arguments
+                    ),
+                ));
             }
-            let verdict = match strength_of(&removed.macro_name, &removed.arguments) {
-                Strength::Exact => "an exact assertion was removed",
-                _ => "an assertion was removed",
-            };
-            findings.push(finding(
-                Severity::High,
-                path,
-                removed.line,
-                "removed_assertion",
-                format!(
-                    "{verdict} from test `{name}` (base line {}: {}({}))",
-                    removed.line, removed.macro_name, removed.arguments
-                ),
-            ));
-        }
+            local.extend(weakening_findings(path, name, base_test, head_test));
+            local
+        });
 
-        findings.extend(weakening_findings(path, name, base_test, head_test));
+        findings.extend(findings_here);
         findings.extend(match_arm_findings(path, name, base_test, head_test));
     }
 
@@ -506,10 +534,17 @@ fn weakening_findings(
         }
 
         // An exact assertion whose expected value moved.
+        //
+        // The comparison is on the *expected* value, not on the whole argument
+        // list. Comparing arguments reported `changed the expected value from
+        // `4` to `4`` for a pure rebinding, because `compute(), 4` and `v, 4`
+        // differ while both expect 4. A finding that reads as self-contradictory
+        // is worse than no finding: it teaches a reader to distrust the rule.
         if base_strength == Strength::Exact
             && head_strength == Strength::Exact
             && base_assertion.macro_name == head_assertion.macro_name
-            && base_assertion.arguments != head_assertion.arguments
+            && expected_value(&base_assertion.arguments)
+                != expected_value(&head_assertion.arguments)
         {
             let (before, after) =
                 split_expected(&base_assertion.arguments, &head_assertion.arguments);
@@ -548,13 +583,64 @@ fn same_subject(a: &Assertion, b: &Assertion) -> bool {
     let (Some(left), Some(right)) = (first_arg(&a.arguments), first_arg(&b.arguments)) else {
         return false;
     };
+    same_resolved_subject(left, right, a_is_eq, b_is_eq, a.macro_name == b.macro_name)
+}
+
+/// Compare two subject expressions, treating one as equal to the other when the
+/// first is a simple binding of the second.
+///
+/// `left` comes from the base revision and `right` from the head. A head
+/// assertion whose subject is a single identifier is resolved through that
+/// revision's bindings before comparison, so introducing
+/// `let v = compute();` above a surviving `assert_eq!(v, 4)` is recognized as
+/// the same assertion rather than reported as removed.
+fn same_resolved_subject(
+    left: &str,
+    right: &str,
+    a_is_eq: bool,
+    b_is_eq: bool,
+    same_macro: bool,
+) -> bool {
     if left == right {
-        return a_is_eq == b_is_eq || a.macro_name == b.macro_name;
+        return a_is_eq == b_is_eq || same_macro;
+    }
+    // A rebinding: the head subject is a name the base subject was bound to.
+    if let Some(resolved) = resolve_binding(right) {
+        if resolved == left {
+            return a_is_eq == b_is_eq || same_macro;
+        }
     }
     if a_is_eq && !b_is_eq {
         return right == left || right.starts_with(&format!("{left} "));
     }
     false
+}
+
+/// Resolve a simple identifier through the bindings recorded for its test.
+fn resolve_binding(subject: &str) -> Option<String> {
+    RESOLUTION.with(|resolution| resolution.borrow().get(subject).cloned())
+}
+
+thread_local! {
+    /// Bindings of the test pair currently being compared.
+    ///
+    /// A thread-local is used because `same_subject` is called from the
+    /// comparison loop over many assertions, and threading a bindings map
+    /// through every helper would obscure the rules. The value is set for the
+    /// duration of one test's comparison and cleared immediately, so it cannot
+    /// leak between tests or between the base and head revisions.
+    static RESOLUTION: std::cell::RefCell<BTreeMap<String, String>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// Run `f` with the head revision's bindings available to subject resolution.
+fn with_bindings<T>(bindings: &BTreeMap<String, String>, f: impl FnOnce() -> T) -> T {
+    RESOLUTION.with(|resolution| {
+        *resolution.borrow_mut() = bindings.clone();
+        let result = f();
+        resolution.borrow_mut().clear();
+        result
+    })
 }
 
 fn is_exact_macro(macro_name: &str) -> bool {
@@ -645,6 +731,14 @@ fn last_arg(arguments: &str) -> Option<String> {
     (!tail.is_empty()).then(|| tail.to_owned())
 }
 
+/// The expected value of an exact assertion, as written.
+///
+/// `assert_eq!(compute(), 4)` and `assert_eq!(v, 4)` both expect `4`, so a
+/// rebinding does not look like a changed expectation.
+fn expected_value(arguments: &str) -> Option<String> {
+    last_arg(arguments)
+}
+
 /// Classify an assertion's strength.
 fn strength_of(macro_name: &str, arguments: &str) -> Strength {
     let compact: String = arguments.chars().filter(|c| !c.is_whitespace()).collect();
@@ -690,6 +784,7 @@ fn shape_of(parsed: &File) -> RevisionShape {
                         assertions: body.assertions,
                         matches: body.matches,
                         body_is_empty: is_empty_block(&item.block),
+                        bindings: body.bindings,
                     },
                 );
             }
@@ -708,9 +803,38 @@ fn shape_of(parsed: &File) -> RevisionShape {
 struct TestBodyCollector {
     assertions: Vec<Assertion>,
     matches: Vec<MatchExpr>,
+    /// Simple `let` bindings in the test body, keyed by variable name.
+    ///
+    /// Used to resolve a rebound subject: `let v = compute(); assert_eq!(v, 4)`
+    /// and `assert_eq!(compute(), 4)` assert the same thing, but without
+    /// resolution the first is reported as a removed assertion. That is a false
+    /// positive on a pure refactor, and a high-severity finding blocks
+    /// verification, so it downgrades a genuinely proven change.
+    ///
+    /// Only *simple* bindings are recorded: a name bound directly to an
+    /// expression, with no destructuring and no shadowing subtleties. Anything
+    /// else is left unresolved, which keeps the conservative direction — an
+    /// unresolved subject is reported rather than assumed equal.
+    bindings: BTreeMap<String, String>,
 }
 
 impl<'ast> Visit<'ast> for TestBodyCollector {
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        // Only `let x = expr;` with a plain identifier pattern and no type
+        // annotation on the *value* side is recorded. A destructuring or a
+        // reference is left alone, because resolving it would require
+        // understanding the binding's use, not just its definition.
+        if let syn::Pat::Ident(pattern) = &local.pat {
+            if pattern.by_ref.is_none() && pattern.subpat.is_none() {
+                if let Some(init) = &local.init {
+                    let value = normalize_tokens(&render(&init.expr));
+                    self.bindings.insert(pattern.ident.to_string(), value);
+                }
+            }
+        }
+        visit::visit_local(self, local);
+    }
+
     fn visit_macro(&mut self, mac: &'ast Macro) {
         if is_assertion_macro(&mac.path) {
             let arguments = normalize_tokens(&mac.tokens.to_string());
@@ -933,22 +1057,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rebound_subject_is_reported_because_it_cannot_be_resolved() {
-        // `assert_eq!(compute(), 4)` and `assert_eq!(v, 4)` are genuinely
-        // different expressions. WitDiff does not resolve `let` bindings, so it
-        // must not claim the assertion merely moved. Surfacing the change is
-        // the conservative direction: a missed removal is a false pass, while
-        // a reported one is reviewed by a human or agent.
-        let base = "#[test]\nfn keeps() {\n    assert_eq!(compute(), 4);\n}\n";
-        let head = "#[test]\nfn keeps() {\n    let v = compute();\n    assert_eq!(v, 4);\n}\n";
-        let findings = analyze(base, head);
-        assert!(
-            rules(&findings).contains(&"removed_assertion"),
-            "an unresolvable rewrite must still be surfaced, got {:?}",
-            rules(&findings)
-        );
-    }
+    /// Superseded: this test asserted the old limitation that `let` bindings
+    /// are not resolved. They now are, so the same input is recognized as a
+    /// rebinding rather than a removal. The behavior in both directions is
+    /// covered by `rebinding_a_subject_is_not_a_removed_assertion` and
+    /// `rebinding_does_not_hide_a_real_change`.
 
     #[test]
     fn deleted_assertion_is_high_severity() {
@@ -1162,6 +1275,79 @@ mod tests {
             !rules(&findings).contains(&"weakened_assertion"),
             "removing an assertion is a removal, not a weakening, got {:?}",
             rules(&findings)
+        );
+    }
+
+    /// Regression: introducing a `let` binding reported the surviving
+    /// assertion as removed. A pure refactor was therefore a high-severity
+    /// finding, which blocks verification and downgrades a proven change.
+    #[test]
+    fn rebinding_a_subject_is_not_a_removed_assertion() {
+        let base = "#[test]\nfn t() {\n    assert_eq!(compute(), 4);\n}\n";
+        let head = "#[test]\nfn t() {\n    let v = compute();\n    assert_eq!(v, 4);\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            findings.is_empty(),
+            "rebinding a subject asserts the same thing, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// The same, with the binding introduced in the head and the expectation
+    /// unchanged. Reported before as `changed the expected value from `4` to
+    /// `4``, which reads as self-contradictory.
+    #[test]
+    fn rebinding_does_not_report_a_changed_expected_value() {
+        let base = "#[test]\nfn t() {\n    assert_eq!(receipt.status, NotVerified);\n}\n";
+        let head =
+            "#[test]\nfn t() {\n    let s = receipt.status;\n    assert_eq!(s, NotVerified);\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            !rules(&findings).contains(&"changed_expected_value"),
+            "the expectation did not change, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// The dangerous direction: resolution must not make a genuinely changed
+    /// expectation or a genuine removal disappear.
+    #[test]
+    fn rebinding_does_not_hide_a_real_change() {
+        let base = "#[test]\nfn t() {\n    assert_eq!(compute(), 4);\n}\n";
+        let head = "#[test]\nfn t() {\n    let v = compute();\n    assert_eq!(v, 5);\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            rules(&findings).contains(&"changed_expected_value"),
+            "a real expectation change must still be reported, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// A binding only resolves within its own test. A name that happens to
+    /// match in another test must not make an unrelated assertion equivalent.
+    #[test]
+    fn a_binding_does_not_leak_between_tests() {
+        let base = "#[test]\nfn a() {\n    assert_eq!(compute(), 4);\n}\n\n#[test]\nfn b() {\n    assert_eq!(other(), 9);\n}\n";
+        let head = "#[test]\nfn a() {\n    assert_eq!(compute(), 4);\n}\n\n#[test]\nfn b() {\n    let v = other();\n    assert_eq!(v, 9);\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            findings.is_empty(),
+            "each test resolves its own bindings, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// A destructuring binding is not resolved, so the conservative direction
+    /// is preserved: an unresolvable subject is reported rather than assumed
+    /// equal.
+    #[test]
+    fn a_destructuring_binding_is_not_resolved() {
+        let base = "#[test]\nfn t() {\n    assert_eq!(compute(), 4);\n}\n";
+        let head = "#[test]\nfn t() {\n    let (v,) = (compute(),);\n    assert_eq!(v, 4);\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            !findings.is_empty(),
+            "an unresolvable subject must be reported rather than assumed equal"
         );
     }
 

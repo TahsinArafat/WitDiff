@@ -167,6 +167,7 @@ impl JavaToolchain {
                         .collect(),
                     skipped: function.skipped,
                     body_is_empty: function.body_is_empty,
+                    bindings: function.bindings.into_iter().collect(),
                 })
                 .collect(),
         })
@@ -197,6 +198,8 @@ struct WireFunction {
     assertions: Vec<WireAssertion>,
     #[serde(default)]
     skipped: bool,
+    #[serde(default)]
+    bindings: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     body_is_empty: bool,
 }

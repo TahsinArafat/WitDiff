@@ -56,6 +56,8 @@ struct TestFunction {
     skipped: bool,
     #[serde(default)]
     body_is_empty: bool,
+    #[serde(default)]
+    bindings: std::collections::BTreeMap<String, String>,
 }
 
 /// The structural shape of one revision of a Python test file.
@@ -300,6 +302,7 @@ fn to_shape(summary: FileSummary) -> crate::testshape::FileSummary {
                     .collect(),
                 skipped: function.skipped,
                 body_is_empty: function.body_is_empty,
+                bindings: function.bindings.into_iter().collect(),
             })
             .collect(),
     }

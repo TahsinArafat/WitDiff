@@ -172,3 +172,33 @@ fn a_new_file_produces_no_comparative_findings() {
         rules(&findings)
     );
 }
+
+/// Regression, matching the Rust and Python cases: introducing a binding
+/// reported the surviving assertion as removed. A pure refactor became a
+/// high-severity finding, which blocks verification.
+#[test]
+#[ignore = "end-to-end: spawns the Go toolchain; run with -- --ignored"]
+fn rebinding_a_subject_is_not_a_removed_assertion() {
+    let base = go_test("TestAdd", "Compute() != 4");
+    let head = "package sample\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n    v := Compute()\n    if v != 4 {\n        t.Errorf(\"failed\")\n    }\n}\n";
+    let findings = analyze(Some(&base), head);
+    assert!(
+        findings.is_empty(),
+        "a rebinding asserts the same thing, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// The dangerous direction: resolution must not hide a real change.
+#[test]
+#[ignore = "end-to-end: spawns the Go toolchain; run with -- --ignored"]
+fn rebinding_does_not_hide_a_real_change() {
+    let base = go_test("TestAdd", "Compute() != 4");
+    let head = "package sample\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n    v := Compute()\n    if v != 5 {\n        t.Errorf(\"failed\")\n    }\n}\n";
+    let findings = analyze(Some(&base), head);
+    assert!(
+        rules(&findings).contains(&"changed_expected_value"),
+        "a real expectation change must still be reported, got {:?}",
+        rules(&findings)
+    );
+}

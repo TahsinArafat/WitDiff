@@ -125,9 +125,10 @@ Still open from the original list:
 - removed error checks (a distinct rule from removed assertions);
 - mock substitution around changed behavior.
 
-The analyzer does not resolve `let` bindings, so an assertion rewritten as
-`assert_eq!(compute(), 4)` -> `assert_eq!(v, 4)` is reported as a removal. That
-is deliberate and conservative, not an oversight.
+Simple bindings are resolved, so a rebound subject is no longer reported as a
+removal. Resolution is narrow by design: reassignment, destructuring and
+cross-test names stay unresolved and are reported rather than assumed equal.
+The shared engine does the same for Python, Go and Java.
 
 ### PG-202: policy configuration
 

@@ -253,3 +253,48 @@ fn strengthening_an_exact_assertion_is_not_a_finding() {
         rules(&findings)
     );
 }
+
+/// Regression, matching the Rust case: introducing a binding reported the
+/// surviving assertion as removed. A pure refactor became a high-severity
+/// finding, which blocks verification and downgrades a proven change.
+#[test]
+#[ignore = "end-to-end: spawns the Python interpreter; run with -- --ignored"]
+fn rebinding_a_subject_is_not_a_removed_assertion() {
+    let base = "def test_a():\n    assert f() == 4\n";
+    let head = "def test_a():\n    v = f()\n    assert v == 4\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        findings.is_empty(),
+        "a rebinding asserts the same thing, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// The dangerous direction: resolution must not hide a real change.
+#[test]
+#[ignore = "end-to-end: spawns the Python interpreter; run with -- --ignored"]
+fn rebinding_does_not_hide_a_real_change() {
+    let base = "def test_a():\n    assert f() == 4\n";
+    let head = "def test_a():\n    v = f()\n    assert v == 5\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        rules(&findings).contains(&"changed_expected_value"),
+        "a real expectation change must still be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// A name assigned more than once is not resolvable, so the conservative
+/// direction is preserved rather than assuming the first binding holds.
+#[test]
+#[ignore = "end-to-end: spawns the Python interpreter; run with -- --ignored"]
+fn a_reassigned_name_is_not_resolved() {
+    let base = "def test_a():\n    assert f() == 4\n";
+    let head = "def test_a():\n    v = g()\n    v = f()\n    assert v == 4\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        !rules(&findings).contains(&"changed_expected_value"),
+        "a reassigned name must not be reported as a changed expectation, got {:?}",
+        rules(&findings)
+    );
+}

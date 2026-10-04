@@ -20,6 +20,8 @@
 //! comparison operators differs per language and is supplied by the caller
 //! rather than hardcoded here.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::model::{IntegrityFinding, Severity};
@@ -49,6 +51,19 @@ pub struct TestFunction {
     /// The body is empty.
     #[serde(default)]
     pub body_is_empty: bool,
+    /// Simple `name = expression` bindings in the test body.
+    ///
+    /// Used to resolve a rebound subject: `v = compute(); assert v == 4` and
+    /// `assert compute() == 4` assert the same thing, but without resolution the
+    /// first is reported as a removed assertion. That is a false positive on a
+    /// pure refactor, and because a high-severity finding blocks verification it
+    /// downgrades a genuinely proven change. Measured in Python as well as Rust.
+    ///
+    /// Only plain single-name assignments are recorded. Destructuring and
+    /// reassignment are left unresolved, which keeps the conservative
+    /// direction: an unresolvable subject is reported rather than assumed equal.
+    #[serde(default)]
+    pub bindings: BTreeMap<String, String>,
 }
 
 /// The structural shape of one revision of a test file.
@@ -189,10 +204,9 @@ pub fn analyze(
             // An assertion whose subject survived under a different form was
             // rewritten, not deleted. Without this, adding a negation — which
             // strengthens a test — is reported as a removal plus an addition.
-            let rewritten = head_function
-                .assertions
-                .iter()
-                .any(|candidate| same_subject(&removed, candidate, operators));
+            let rewritten = head_function.assertions.iter().any(|candidate| {
+                same_subject(&removed, candidate, operators, &head_function.bindings)
+            });
             if rewritten {
                 continue;
             }
@@ -283,10 +297,14 @@ fn weakening_findings(
     }
 
     for head_assertion in remaining_head {
-        let Some(base_assertion) = remaining_base
-            .iter()
-            .find(|candidate| same_subject(candidate, head_assertion, operators))
-        else {
+        let Some(base_assertion) = remaining_base.iter().find(|candidate| {
+            same_subject(
+                candidate,
+                head_assertion,
+                operators,
+                &head_function.bindings,
+            )
+        }) else {
             continue;
         };
 
@@ -307,9 +325,15 @@ fn weakening_findings(
             continue;
         }
 
+        // The comparison is on the *expected* value, not the whole expression.
+        // Comparing whole strings reported `changed the expectation from `4` to
+        // `4`` for a pure rebinding, which reads as self-contradictory and
+        // teaches a reader to distrust the rule. Found in Rust first, then
+        // confirmed here so every language gets the fix once.
         if base_strength == Strength::Exact
             && head_strength == Strength::Exact
-            && base_assertion.test != head_assertion.test
+            && expectation_of(&base_assertion.test, operators)
+                != expectation_of(&head_assertion.test, operators)
         {
             findings.push(finding(
                 Severity::High,
@@ -325,6 +349,22 @@ fn weakening_findings(
     }
 
     findings
+}
+
+/// The expected side of an exact assertion, as written.
+fn expectation_of(normalized: &str, operators: &Operators) -> Option<String> {
+    let index = operators
+        .comparisons
+        .iter()
+        .filter_map(|operator| normalized.find(operator))
+        .min()?;
+    let operator = operators
+        .comparisons
+        .iter()
+        .find(|operator| normalized[index..].starts_with(**operator))?;
+    let after = &normalized[index + operator.len()..];
+    let trimmed = after.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 /// Classify an assertion's strength.
@@ -352,10 +392,15 @@ fn is_trivial(normalized: &str, operators: &Operators) -> bool {
 ///
 /// Deliberately strict: a false pairing would invent a weakening the code does
 /// not contain, which trains a reader to ignore the rule.
-fn same_subject(a: &Assertion, b: &Assertion, operators: &Operators) -> bool {
+fn same_subject(
+    a: &Assertion,
+    b: &Assertion,
+    operators: &Operators,
+    bindings: &BTreeMap<String, String>,
+) -> bool {
     match (
-        subject_of(&a.test, operators),
-        subject_of(&b.test, operators),
+        subject_of_with(&a.test, operators, bindings),
+        subject_of_with(&b.test, operators, bindings),
     ) {
         (Some(left), Some(right)) => left == right,
         _ => false,
@@ -370,6 +415,26 @@ fn same_subject(a: &Assertion, b: &Assertion, operators: &Operators) -> bool {
 /// positive on a change that strengthens the test, which downgrades a genuinely
 /// verified change because high-severity findings block verification.
 pub fn subject_of(normalized: &str, operators: &Operators) -> Option<String> {
+    subject_of_with(normalized, operators, &BTreeMap::new())
+}
+
+/// The same, resolving a bare name through the test's bindings.
+fn subject_of_with(
+    normalized: &str,
+    operators: &Operators,
+    bindings: &BTreeMap<String, String>,
+) -> Option<String> {
+    let base = subject_of_raw(normalized, operators)?;
+    // A subject that is a single name bound earlier in the same test denotes
+    // whatever it was bound to, so `v` and `compute()` are the same subject.
+    if let Some(bound) = bindings.get(&base) {
+        return subject_of_raw(bound, operators);
+    }
+    Some(base)
+}
+
+/// The raw leading expression, with unary operators stripped.
+fn subject_of_raw(normalized: &str, operators: &Operators) -> Option<String> {
     if let Some(index) = operators
         .comparisons
         .iter()
@@ -444,7 +509,21 @@ mod tests {
                 .collect(),
             skipped: false,
             body_is_empty: false,
+            bindings: BTreeMap::new(),
         }
+    }
+
+    /// A function whose body binds `name` to `expression`.
+    fn function_with_binding(
+        name: &str,
+        assertions: &[&str],
+        binding: (&str, &str),
+    ) -> TestFunction {
+        let mut function = function(name, assertions);
+        function
+            .bindings
+            .insert(binding.0.to_owned(), binding.1.to_owned());
+        function
     }
 
     fn summary(functions: Vec<TestFunction>) -> FileSummary {
@@ -584,6 +663,62 @@ mod tests {
         let head = summary(vec![function("t", &["f() Eq 1"])]);
         let findings = analyze("t.py", "Python", &PYTHON, None, &head);
         assert!(findings.is_empty(), "got {:?}", rules(&findings));
+    }
+
+    /// Regression found in Rust and confirmed in Python: introducing a binding
+    /// reported the surviving assertion as removed. A pure refactor became a
+    /// high-severity finding, which blocks verification.
+    #[test]
+    fn rebinding_a_subject_is_not_a_removed_assertion() {
+        let base = summary(vec![function("t", &["f() Eq 4"])]);
+        let head = summary(vec![function_with_binding("t", &["v Eq 4"], ("v", "f()"))]);
+        let findings = analyze("t.py", "Python", &PYTHON, Some(&base), &head);
+        assert!(
+            findings.is_empty(),
+            "a rebinding asserts the same thing, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// The same case previously reported `changed the expectation from `4` to
+    /// `4``, which reads as self-contradictory and teaches a reader to distrust
+    /// the rule.
+    #[test]
+    fn rebinding_does_not_report_a_changed_expectation() {
+        let base = summary(vec![function("t", &["f() Eq 4"])]);
+        let head = summary(vec![function_with_binding("t", &["v Eq 4"], ("v", "f()"))]);
+        let findings = analyze("t.py", "Python", &PYTHON, Some(&base), &head);
+        assert!(
+            !rules(&findings).contains(&"changed_expected_value"),
+            "the expectation did not change, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// The dangerous direction: resolution must not hide a real change.
+    #[test]
+    fn rebinding_does_not_hide_a_real_change() {
+        let base = summary(vec![function("t", &["f() Eq 4"])]);
+        let head = summary(vec![function_with_binding("t", &["v Eq 5"], ("v", "f()"))]);
+        let findings = analyze("t.py", "Python", &PYTHON, Some(&base), &head);
+        assert!(
+            rules(&findings).contains(&"changed_expected_value"),
+            "a real expectation change must still be reported, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// An unresolvable subject is reported rather than assumed equal, which is
+    /// the conservative direction.
+    #[test]
+    fn an_unknown_name_is_not_assumed_equal() {
+        let base = summary(vec![function("t", &["f() Eq 4"])]);
+        let head = summary(vec![function("t", &["w Eq 4"])]);
+        let findings = analyze("t.py", "Python", &PYTHON, Some(&base), &head);
+        assert!(
+            !findings.is_empty(),
+            "an unresolved name must be reported, not assumed equal to f()"
+        );
     }
 
     #[test]

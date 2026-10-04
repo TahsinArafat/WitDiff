@@ -88,12 +88,23 @@ no finding. A `match` replaced by an `if`/`else` chain is not reported
 either: its assertions are still compared, and the structural removal is a
 common refactor.
 
-WitDiff does not resolve `let` bindings. An assertion rewritten from
-`assert_eq!(compute(), 4)` to `assert_eq!(v, 4)` is therefore reported as
-`removed_assertion`, because the analyzer cannot prove that the assertion merely
-moved to a different subject. This is the conservative direction: a reported
-removal is reviewed by a human or agent, while a missed removal would be a false
-pass.
+Simple bindings are resolved. An assertion rewritten from
+`assert_eq!(compute(), 4)` to `let v = compute(); assert_eq!(v, 4)` is
+recognized as the same assertion, because it asserts the same thing.
+
+Resolution is deliberately narrow, and the narrowness is the conservative
+direction:
+
+- only a single name bound to a single expression is recorded;
+- a name assigned more than once is not resolved, since the later value is what
+  the assertion sees;
+- destructuring (`let (v,) = ...`) is not resolved;
+- resolution is scoped to one test, so a binding cannot make an unrelated
+  assertion in another test look equivalent.
+
+Anything that cannot be resolved is reported rather than assumed equal: a
+reported removal is reviewed by a human or agent, while a missed removal would
+be a false pass.
 
 A test file that cannot be parsed yields `test_source_unparsable` and falls back
 to the line-oriented rules. It is never reported as clean.

@@ -48,11 +48,15 @@ refactor into a false positive.
   longer produce findings. This is verified end-to-end, not only in unit tests.
 - `syn` becomes a build dependency of `witdiff-core`. It is a compile-time
   dependency only; core verification still requires no network access.
-- Undecidable cases resolve toward reporting, not silence. WitDiff does not
-  resolve `let` bindings, so `assert_eq!(compute(), 4)` becoming
-  `assert_eq!(v, 4)` is reported as a removal. The analyzer cannot prove the
-  assertion merely moved, and a false removal is reviewed by a human or agent
-  while a missed removal would be a false pass.
+- Undecidable cases resolve toward reporting, not silence. A subject that
+  cannot be resolved is reported rather than assumed equivalent.
+- **Simple `let` bindings are resolved** (added after ADR-0006; see below).
+  `assert_eq!(compute(), 4)` becoming
+  `let v = compute(); assert_eq!(v, 4)` is recognized as the same assertion,
+  because reporting it as a removal made a pure refactor a high-severity
+  finding, which blocks verification. Only single-name bindings with one
+  assignment are recorded: destructuring and reassignment stay unresolved,
+  which preserves the conservative direction.
 - A file that cannot be parsed yields an explicit `test_source_unparsable`
   finding and falls back to the line-oriented rules. It is never reported as
   clean.
