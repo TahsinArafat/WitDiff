@@ -76,17 +76,16 @@ cargo run -p witdiff -- verify --base HEAD~1
 
 Read `docs/roadmap.md`. High-value tasks currently are:
 
-1. running the Ruby and JavaScript analyzers end to end against a real RSpec and
-   a real `acorn`. Both are verified against their parsers' own output and
-   against the parser-absence contract, but not against a live run, because
-   `gem install` and a JavaScript parser cannot be installed here. CI with real
-   dependencies would close both;
-2. the signed-receipt **signature** itself. Both prerequisites from ADR-0015 are
-   done (`verification_digest`); what remains undecided is key management —
-   per-developer, per-repository or per-CI-runner — and whether the goal is
-   tamper-evidence or non-repudiation. Do not implement a signature before
-   answering those, because one that reads as stronger evidence than it is would
-   be worse than none.
+1. three verifications that this environment could not perform, all recorded in
+   their ADRs as environment workarounds rather than design choices:
+   - running the Ruby and JavaScript analyzers end to end against a real RSpec
+     and a real `acorn`. Both are verified against their parsers' own output
+     and against the parser-absence contract, but never against a live run,
+     because `gem install` and a JavaScript parser cannot be installed here.
+     CI with real dependencies would close both;
+   - replacing the Node-based Ed25519 helper with a Rust crate. `ed25519-dalek`
+     resolves but cannot be fetched here, and macOS LibreSSL has no Ed25519, so
+     Node's built-in crypto was the only implementation that could be verified.
 
 Integration tests, syntax-aware integrity analysis including `match`-arm
 comparison, targeted test selection, inline `#[cfg(test)]` transplantation

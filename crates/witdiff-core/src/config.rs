@@ -65,6 +65,19 @@ pub struct VerificationConfig {
     /// an error rather than a silent fallback to the Rust classifier.
     #[serde(default = "default_framework")]
     pub framework: String,
+    /// Path to an Ed25519 private key used to sign the receipt.
+    ///
+    /// When set, the receipt is signed over its `verification_digest`. WitDiff
+    /// reads the key and never stores, copies or logs it (ADR-0022).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key: Option<String>,
+    /// The exit code when a receipt could not be signed.
+    ///
+    /// Defaults to 1, a tool error. Setting it to 2 makes an unsigned receipt
+    /// fail a CI gate, which is what an operator who asked for signatures and did
+    /// not get one wants.
+    #[serde(default)]
+    pub signing_failure_exit_code: u8,
 }
 
 fn default_framework() -> String {
@@ -140,6 +153,8 @@ impl Default for VerificationConfig {
             max_mutants: default_max_mutants(),
             max_mutants_per_function: default_max_mutants_per_function(),
             framework: default_framework(),
+            signing_key: None,
+            signing_failure_exit_code: 1,
         }
     }
 }

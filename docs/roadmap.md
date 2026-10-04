@@ -97,7 +97,7 @@ See `docs/support-matrix.md` for the per-language detail, including what Java,
 - [x] universal agent skill/instruction package (`examples/agent-instruction.txt`)
 - [x] MCP server wrapping core methods (`crates/witdiff-mcp`, ADR-0014)
 - [x] content digest and revision binding for receipts (ADR-0015 prerequisites)
-- [ ] the signature itself, pending the key-management decision ADR-0015 records
+- [x] signature over the verification digest (ADR-0022)
 
 CI gating treats "nothing to prove" as distinct from "the proof failed", so a
 documentation-only pull request no longer fails the check. The policy lives in

@@ -46,8 +46,44 @@ digests. So the fingerprint cannot distinguish one clean tree from another, and
 the digest can.
 
 Two receipts with the same `verification_digest` describe the same verified
-inputs. That is checkable without any key material, and it is what a signature
-would cover (ADR-0015).
+inputs. That is checkable without any key material.
+
+## Signatures
+
+A receipt can carry a detached Ed25519 signature. It proves two things: that the
+receipt has not been edited since the run, and that it describes the code the
+digest names. It does **not** prove who produced it — that is tamper-evidence,
+not non-repudiation (ADR-0022).
+
+```toml
+[verification]
+signing_key = "/run/secrets/witdiff-signing-key.pem"
+```
+
+WitDiff reads the key, signs, and forgets it. It never creates, stores, copies or
+logs a key, and it never writes one into the repository. **The key path is a
+secret location, not a secret value** — pointing at a key inside the repository is
+publishing it.
+
+The signature covers the domain separator, the status, and the digest:
+
+```text
+witdiff.receipt-signature.v1\0<status>\0<digest>
+```
+
+The status is included because signing the digest alone left the receipt's
+headline claim outside the signature: a receipt edited from `not_verified` to
+`verified` still verified, because the digest was unchanged. That is exactly the
+borrowed authority this project exists to refuse.
+
+Verifying is a separate, key-free concern in the common case: `witdiff receipt`
+reports whether a receipt's signature covers its own digest, and cryptography
+requires the public key, which is the operator's to supply.
+
+If signing fails — no Node, an unreadable key, no digest — the receipt is still
+written, unsigned, and a note says so. An unsigned receipt is a fact, not a
+failure. Set `signing_failure_exit_code = 2` to make an unsigned receipt fail a
+CI gate.
 
 ## Staleness
 

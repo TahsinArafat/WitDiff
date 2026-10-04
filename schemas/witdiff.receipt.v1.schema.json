@@ -147,6 +147,35 @@
         "string",
         "null"
       ]
+    },
+    "signature": {
+      "description": "A detached Ed25519 signature over the domain separator, the status and the verification digest. Proves the receipt was not edited after the run and that it describes the recorded code. It does NOT prove who produced it: that is tamper-evidence, not non-repudiation (ADR-0022). The status is included because signing the digest alone left the receipt's headline claim editable while the signature still verified.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "algorithm",
+        "value",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "ed25519"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64 detached signature."
+        },
+        "digest": {
+          "type": "string",
+          "description": "The verification_digest this signature covers."
+        }
+      }
     }
   },
   "$defs": {

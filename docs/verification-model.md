@@ -141,6 +141,24 @@ Production changes elsewhere in the same file do **not** block the splice. A
 commit that fixes a bug and tightens its inline test is the normal shape of a
 change, and the production change is simply not transplanted.
 
+## Signatures
+
+A receipt may carry a detached Ed25519 signature over the domain separator, the
+status and the `verification_digest`.
+
+It is **tamper-evidence, not non-repudiation**: it shows the receipt has not been
+edited since the run and describes the code the digest names, but says nothing
+about *who* produced it. Keys are operator-supplied; WitDiff never creates,
+stores or logs one.
+
+The status is included in the signed bytes because signing the digest alone left
+the receipt's headline claim editable while the signature still verified — a
+signature that can be carried onto a forged result is worse than none.
+
+Signing is opt-in and additive: a receipt without a signature parses and behaves
+exactly as before, and an unsigned receipt is a fact rather than a failure
+(ADR-0022).
+
 ## Gating in CI
 
 The CLI's exit code is a three-way signal, and CI treats statuses in three

@@ -223,6 +223,30 @@ impl ReceiptFreshness {
     }
 }
 
+/// A detached signature and the digest it covers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptSignature {
+    /// `ed25519`, recorded so a verifier knows what to check with.
+    pub algorithm: String,
+    /// Base64 signature over the domain-separated digest.
+    pub value: String,
+    /// The digest this signature covers.
+    ///
+    /// Stored so a consumer can check the signature against the value in the
+    /// same receipt without recomputing it from the repository.
+    pub digest: String,
+}
+
+/// Whether a detached signature is present and covers the recorded digest.
+///
+/// Only checks that the two agree. Verifying the cryptography requires the
+/// public key, which WitDiff is deliberately not involved with.
+pub fn signature_covers_digest(receipt: &Receipt) -> Option<bool> {
+    let signature = receipt.signature.as_ref()?;
+    let digest = receipt.verification_digest.as_deref()?;
+    Some(signature.digest == digest)
+}
+
 /// How a verification status should be treated as a gate.
 ///
 /// Three classes rather than two, because "no proof was attempted" is not the
@@ -439,6 +463,16 @@ pub struct Receipt {
     /// existed still parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_digest: Option<String>,
+    /// A detached Ed25519 signature over `verification_digest`.
+    ///
+    /// Proves the receipt has not been edited since the run, and that the
+    /// digest matches the code verified. It does **not** prove who produced the
+    /// receipt: that is tamper-evidence, not non-repudiation (ADR-0022).
+    ///
+    /// Additive in v1 and optional. A receipt without one is unsigned, which is
+    /// a fact and not a failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<ReceiptSignature>,
     /// Changed-code mutation evidence, when enabled.
     ///
     /// Supplementary only: this field never affects `status` (ADR-0011).

@@ -20,6 +20,7 @@ pub mod rubyscript;
 pub mod runner;
 pub mod rustanalysis;
 pub mod selection;
+pub mod signing;
 pub mod testshape;
 pub mod verify;
 

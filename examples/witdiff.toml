@@ -41,3 +41,16 @@ timeout_secs = 900
 mutation = false
 max_mutants = 25
 max_mutants_per_function = 5
+
+# Optional: sign the receipt with an Ed25519 key (ADR-0022).
+#
+# The signature proves the receipt was not edited after the run and describes the
+# code the verification digest names. It does NOT prove who produced it.
+#
+# WitDiff reads the key and never creates, stores, copies or logs one. The path
+# is a secret *location*, not a secret value: pointing at a key inside the
+# repository publishes it.
+#
+# signing_key = "/run/secrets/witdiff-signing-key.pem"
+# Make an unsigned receipt fail a CI gate rather than pass quietly.
+# signing_failure_exit_code = 2

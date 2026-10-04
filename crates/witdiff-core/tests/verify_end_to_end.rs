@@ -26,7 +26,9 @@
 //! this, the base worktree would fall back to `~/.cargo`'s shared registry but
 //! a private target dir, and the two runs would each pay full compile cost.
 
-use std::{fs, path::Path, process::Command as StdCommand};
+use std::{fs, path::Path, process::Command};
+
+use std::process::Command as StdCommand;
 
 use tempfile::TempDir;
 use witdiff_core::{
@@ -1516,4 +1518,119 @@ fn integrity_findings_survive_a_missing_test_command() {
          and must still be reported; notes: {:?}",
         receipt.notes
     );
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0022: signed receipts
+// ---------------------------------------------------------------------------
+
+/// A receipt is signed when a key is configured, and the signature covers the
+/// status as well as the digest.
+#[test]
+#[ignore = "end-to-end: spawns real commands; run with -- --ignored"]
+fn a_configured_key_signs_the_receipt() {
+    let Some(key) = write_ed25519_key() else {
+        return; // No Node in this environment; nothing to assert.
+    };
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    let mut config = fixture_config();
+    config.verification.signing_key = Some(key.display().to_string());
+
+    let receipt = fixture.verify(&config);
+    let signature = receipt
+        .signature
+        .as_ref()
+        .expect("a configured key must sign");
+
+    assert_eq!(signature.algorithm, "ed25519");
+    assert_eq!(
+        signature.digest,
+        receipt.verification_digest.as_deref().unwrap_or_default(),
+        "the signature must cover the digest in the same receipt"
+    );
+}
+
+/// Without a key the receipt is simply unsigned — not an error, because
+/// signing is opt-in.
+#[test]
+#[ignore = "end-to-end: spawns real commands; run with -- --ignored"]
+fn an_unconfigured_key_leaves_the_receipt_unsigned() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    let receipt = fixture.verify(&fixture_config());
+    assert!(receipt.signature.is_none(), "signing is opt-in");
+}
+
+/// A key path that does not exist must not silently yield an unsigned receipt:
+/// the operator asked for a signature and did not get one, so it is reported.
+#[test]
+#[ignore = "end-to-end: spawns real commands; run with -- --ignored"]
+fn a_missing_key_is_reported_rather_than_ignored() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    let mut config = fixture_config();
+    config.verification.signing_key = Some("/nonexistent/witdiff-signing-key.pem".to_owned());
+
+    let receipt = fixture.verify(&config);
+    assert!(receipt.signature.is_none());
+    assert!(
+        receipt
+            .notes
+            .iter()
+            .any(|note| note.contains("could not be signed")),
+        "the operator must be told the receipt is unsigned, got {:?}",
+        receipt.notes
+    );
+}
+
+/// Write a throwaway Ed25519 key, or return `None` when Node is unavailable.
+fn write_ed25519_key() -> Option<std::path::PathBuf> {
+    if !Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return None;
+    }
+    let path = std::env::temp_dir().join(format!("witdiff-test-key-{}.pem", std::process::id()));
+    let script = r#"
+const c = require("crypto"), fs = require("fs");
+const { privateKey } = c.generateKeyPairSync("ed25519");
+// argv[2], not argv[1]: argv[1] is this script's own path, and writing the
+// key there overwrote the script before it could run.
+fs.writeFileSync(process.argv[2], privateKey.export({ type: "pkcs8", format: "pem" }));
+"#;
+    let script_path =
+        std::env::temp_dir().join(format!("witdiff-keygen-{}.js", std::process::id()));
+    fs::write(&script_path, script).expect("write keygen");
+    let status = Command::new("node")
+        .arg(&script_path)
+        .arg(&path)
+        .status()
+        .expect("run keygen");
+    let _ = fs::remove_file(&script_path);
+    assert!(status.success(), "key generation should succeed");
+    Some(path)
 }

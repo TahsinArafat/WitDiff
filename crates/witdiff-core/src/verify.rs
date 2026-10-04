@@ -443,6 +443,33 @@ pub fn verify_repository(
     })
     .ok();
 
+    // Signing is opt-in and happens after the digest, so the signature covers
+    // exactly what was verified. A signing failure never fails verification: the
+    // receipt is still produced, unsigned, and the operator is told (ADR-0022).
+    let mut signature = None;
+    if let Some(key_path) = &config.verification.signing_key {
+        match verification_digest.as_deref() {
+            Some(digest) => {
+                let resolved = if std::path::Path::new(key_path).is_absolute() {
+                    std::path::PathBuf::from(key_path)
+                } else {
+                    repo.root().join(key_path)
+                };
+                match crate::signing::sign_digest(status.as_str(), digest, &resolved) {
+                    Ok(signed) => signature = Some(signed),
+                    Err(error) => notes.push(format!(
+                        "the receipt could not be signed with `{}`: {error:#}. The receipt is unsigned; a signature proves only that it was not edited after the run",
+                        resolved.display()
+                    )),
+                }
+            }
+            None => notes.push(
+                "signing was requested but no verification digest could be computed, so the                  receipt is unsigned"
+                    .to_owned(),
+            ),
+        }
+    }
+
     let after = repo.workspace_fingerprint(&base)?;
     let evidence_fresh = before == after;
     if !evidence_fresh {
@@ -517,6 +544,7 @@ pub fn verify_repository(
         spliced_inline_tests,
         refused_inline_tests,
         verification_digest,
+        signature,
         mutation,
     })
 }
