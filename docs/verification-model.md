@@ -55,6 +55,11 @@ Structural rules:
 - `changed_expected_value`: the same subject expression with a different
   expected value;
 - `weakened_assertion`: an exact assertion replaced by a weaker predicate;
+- `removed_error_check`: a failure guard present at base and absent at head.
+  A guard is a conditional that fails the test without an assertion macro, such
+  as `if r.is_err() { panic!("...") }`. Measured before this rule existed:
+  deleting one produced **zero** findings, and the test still compiled and
+  passed, so red/green could not see it either;
 - `removed_match_arm`: a `match` arm present at base and absent at head
   on the same scrutinee; a guard is part of the arm's identity, and
   collapsing specific arms into a wildcard is reported because the

@@ -76,13 +76,11 @@ cargo run -p witdiff -- verify --base HEAD~1
 
 Read `docs/roadmap.md`. High-value tasks currently are:
 
-1. removed-error-check detection in the structural analyzer;
-2. the remaining mutation operators (condition negation, numeric return substitution);
-3. structural integrity analysis for Ruby — classification and `init` detection
+1. structural integrity analysis for Ruby — classification and `init` detection
    are done, and `ripper` ships with the runtime, so it follows ADR-0017's shape;
    and for JavaScript, which needs its own decision because Node ships no
    parser;
-4. the signed-receipt prerequisites in ADR-0015: a content digest over the
+2. the signed-receipt prerequisites in ADR-0015: a content digest over the
    verified inputs, then a checkable binding from receipt to revision. Key
    management is an open question and must be settled before implementation.
 

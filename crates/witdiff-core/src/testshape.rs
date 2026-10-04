@@ -51,6 +51,17 @@ pub struct TestFunction {
     /// The body is empty.
     #[serde(default)]
     pub body_is_empty: bool,
+    /// Failure guards: conditionals whose body reports failure without an
+    /// assertion macro.
+    ///
+    /// Rust's `if x.is_err() { panic!("...") }`, Go's
+    /// `if got != want { t.Fatal(...) }` when not counted as an assertion, and
+    /// Python's `if not ok: raise AssertionError`. These check behavior just as
+    /// an assertion does, but nothing in the assertion-based rules sees them:
+    /// measured, deleting one produced **zero** findings while the test still
+    /// compiled and passed.
+    #[serde(default)]
+    pub guards: Vec<String>,
     /// Simple `name = expression` bindings in the test body.
     ///
     /// Used to resolve a rebound subject: `v = compute(); assert v == 4` and
@@ -228,6 +239,7 @@ pub fn analyze(
             base_function,
             operators,
         ));
+        findings.extend(removed_guard_findings(path, head_function, base_function));
     }
 
     for base_function in &base.functions {
@@ -246,6 +258,45 @@ pub fn analyze(
                     language, base_function.name, base_function.line
                 ),
             ));
+        }
+    }
+
+    findings
+}
+
+/// Guards present at base and absent at head.
+///
+/// A guard is a conditional that fails the test without an assertion macro, so
+/// the assertion rules never see it. Measured before this rule existed:
+/// deleting `if r.is_err() { panic!("expected a number"); }` produced zero
+/// findings, and the test still compiled and passed — the check it performed
+/// was simply gone.
+///
+/// Matched as a multiset on the normalized condition, like assertions, so
+/// reordering or reformatting is not a finding.
+fn removed_guard_findings(
+    path: &str,
+    head_function: &TestFunction,
+    base_function: &TestFunction,
+) -> Vec<IntegrityFinding> {
+    let mut findings = Vec::new();
+    let mut unmatched: Vec<&String> = head_function.guards.iter().collect();
+
+    for guard in &base_function.guards {
+        match unmatched.iter().position(|candidate| *candidate == guard) {
+            Some(index) => {
+                unmatched.remove(index);
+            }
+            None => findings.push(finding(
+                Severity::High,
+                path,
+                base_function.line,
+                "removed_error_check",
+                format!(
+                    "test `{}` no longer checks a failure path (was `{}`); the test still compiles and passes, but the condition it guarded is no longer verified",
+                    base_function.name, guard
+                ),
+            )),
         }
     }
 
@@ -509,6 +560,7 @@ mod tests {
                 .collect(),
             skipped: false,
             body_is_empty: false,
+            guards: Vec::new(),
             bindings: BTreeMap::new(),
         }
     }

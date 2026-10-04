@@ -159,6 +159,7 @@ impl GoToolchain {
                         .collect(),
                     skipped: function.skipped,
                     body_is_empty: function.empty,
+                    guards: function.guards,
                     bindings: function.bindings.into_iter().collect(),
                 })
                 .collect(),
@@ -192,6 +193,8 @@ struct WireFunction {
     skipped: bool,
     #[serde(default)]
     bindings: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    guards: Vec<String>,
     #[serde(default, rename = "body_is_empty")]
     empty: bool,
 }

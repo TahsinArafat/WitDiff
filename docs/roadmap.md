@@ -51,15 +51,15 @@ ADR-0008 (targeted selection refuses rather than approximates), ADR-0009
 ## M3 — changed-code mutation proof
 
 - [x] identify changed functions
-- [x] mutation operators: equality flip, comparison boundary, logical flip, boolean literal flip
+- [x] mutation operators: equality flip, comparison boundary, logical flip, boolean literal flip, condition negation, numeric substitution
 - [x] run changed tests against mutants
 - [x] receipt fields for generated/killed/survived/not_compiled/timeout/skipped mutants
 - [x] deterministic mutant IDs
 - [x] cache by source/test fingerprint
 
-Not yet implemented: condition negation and numeric return-value substitution.
-Mutation is opt-in (`verification.mutation`) and supplementary: it never changes
-`status`. See ADR-0011.
+All six planned operators are implemented. Mutation is opt-in
+(`verification.mutation`) and supplementary: it never changes `status`. See
+ADR-0011.
 
 ## M4 — language adapters
 

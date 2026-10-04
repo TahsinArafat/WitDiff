@@ -144,9 +144,17 @@ operator so the same revision pair yields the same IDs across runs.
 
 ### PG-302: Rust mutation operators
 
-Status: mostly done. Shipped: equality flip, comparison boundary, logical flip,
-boolean literal flip. Still open: condition negation and simple numeric
-return-value substitutions.
+Status: done. Equality flip, comparison boundary, logical flip, boolean literal
+flip, condition negation, and numeric substitution.
+
+Condition negation mutates in both directions where each is valid: an existing
+`!` can be dropped, and an `if`/`while` condition can be negated. Addition is
+limited to control-flow conditions because that is where `!` is always valid
+syntax and always changes behavior; adding it to an arbitrary expression would
+require matching every expression kind for no additional signal.
+
+Numeric substitution maps `0` to `1` and any other literal to `0`, so the pair
+always differs and covers the off-by-one boundary that tests most often miss.
 
 Mutants are confined to changed lines and to code outside every `#[cfg(test)]`
 module, enforced from the parsed tree rather than by text matching.

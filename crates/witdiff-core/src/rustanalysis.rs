@@ -107,6 +107,10 @@ struct TestFn {
     /// Simple `let` bindings, used to resolve a rebound subject. See
     /// [`TestBodyCollector::bindings`].
     bindings: BTreeMap<String, String>,
+    /// Failure guards: conditionals that fail the test without an assertion
+    /// macro, such as `if r.is_err() { panic!("...") }`. Recorded as their
+    /// normalized condition.
+    guards: Vec<String>,
 }
 
 /// The structure of one parsed revision of a test file.
@@ -326,6 +330,9 @@ pub fn analyze_rust_test_change(
 
         findings.extend(findings_here);
         findings.extend(match_arm_findings(path, name, base_test, head_test));
+        findings.extend(removed_guard_findings_rust(
+            path, name, base_test, head_test,
+        ));
     }
 
     for name in base.tests.keys() {
@@ -344,6 +351,45 @@ pub fn analyze_rust_test_change(
                     ),
                 ));
             }
+        }
+    }
+
+    findings
+}
+
+/// Guards present at base and absent at head.
+///
+/// A guard is a conditional that fails the test without an assertion macro:
+/// `if r.is_err() { panic!("expected a number"); }`. The assertion rules never
+/// see it, and measured before this rule existed, deleting one produced **zero**
+/// findings while the test still compiled and passed — the check was simply
+/// gone, and nothing in the receipt said so.
+///
+/// Matched as a multiset on the normalized condition, so reordering or
+/// reformatting is not a finding.
+fn removed_guard_findings_rust(
+    path: &str,
+    test_name: &str,
+    base: &TestFn,
+    head: &TestFn,
+) -> Vec<IntegrityFinding> {
+    let mut findings = Vec::new();
+    let mut unmatched: Vec<&String> = head.guards.iter().collect();
+
+    for guard in &base.guards {
+        match unmatched.iter().position(|candidate| *candidate == guard) {
+            Some(index) => {
+                unmatched.remove(index);
+            }
+            None => findings.push(finding(
+                Severity::High,
+                path,
+                base.line,
+                "removed_error_check",
+                format!(
+                    "test `{test_name}` no longer checks a failure path (was `{guard}`); the test still compiles and passes, but the condition it guarded is no longer verified"
+                ),
+            )),
         }
     }
 
@@ -785,6 +831,7 @@ fn shape_of(parsed: &File) -> RevisionShape {
                         matches: body.matches,
                         body_is_empty: is_empty_block(&item.block),
                         bindings: body.bindings,
+                        guards: body.guards,
                     },
                 );
             }
@@ -803,6 +850,14 @@ fn shape_of(parsed: &File) -> RevisionShape {
 struct TestBodyCollector {
     assertions: Vec<Assertion>,
     matches: Vec<MatchExpr>,
+    /// Guards seen in the test body, as normalized conditions.
+    ///
+    /// A guard is an `if` whose body always fails the test — `panic!`,
+    /// `unreachable!`, `assert!` counted separately, or a
+    /// `return`/`std::process::exit`. These are not assertions, so the
+    /// assertion rules never see them, and deleting one used to produce no
+    /// finding at all while the test still compiled and passed.
+    guards: Vec<String>,
     /// Simple `let` bindings in the test body, keyed by variable name.
     ///
     /// Used to resolve a rebound subject: `let v = compute(); assert_eq!(v, 4)`
@@ -852,6 +907,18 @@ impl<'ast> Visit<'ast> for TestBodyCollector {
         visit::visit_macro(self, mac);
     }
 
+    fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
+        // A guard fails the test unconditionally in its body. Only `panic!`,
+        // `unreachable!` and `todo!`/`unimplemented!` qualify: an `assert!`
+        // inside an `if` is already tracked as an assertion, and counting it
+        // twice would report one deletion as two findings.
+        if block_always_fails(&expression.then_branch) {
+            self.guards
+                .push(normalize_tokens(&render(&expression.cond)));
+        }
+        visit::visit_expr_if(self, expression);
+    }
+
     fn visit_expr_match(&mut self, expression: &'ast ExprMatch) {
         let scrutinee = normalize_tokens(&render(&expression.expr));
         let arms = expression
@@ -893,6 +960,39 @@ fn split_arm(pat: &Pat) -> (String, Option<String>) {
 /// stable across versions.
 fn render<T: ToTokens>(node: &T) -> String {
     node.to_token_stream().to_string()
+}
+
+/// Whether a block unconditionally fails the test.
+///
+/// Recurses into nested blocks so `if x { { panic!() } }` is recognized, and
+/// treats an `if`/`else` chain as failing only when every branch does, because
+/// a branch that continues means the condition is not a guard.
+fn block_always_fails(block: &syn::Block) -> bool {
+    block.stmts.iter().any(statement_always_fails)
+}
+
+fn statement_always_fails(statement: &syn::Stmt) -> bool {
+    match statement {
+        syn::Stmt::Macro(mac) => mac.mac.path.segments.last().is_some_and(|segment| {
+            matches!(
+                segment.ident.to_string().as_str(),
+                "panic" | "unreachable" | "unimplemented" | "todo"
+            )
+        }),
+        syn::Stmt::Expr(syn::Expr::Block(inner), _) => block_always_fails(&inner.block),
+        syn::Stmt::Expr(syn::Expr::If(branch), _) => {
+            block_always_fails(&branch.then_branch)
+                && branch.else_branch.as_ref().is_some_and(|(_, otherwise)| {
+                    match otherwise.as_ref() {
+                        syn::Expr::Block(inner) => block_always_fails(&inner.block),
+                        syn::Expr::If(nested) => block_always_fails(&nested.then_branch),
+                        _ => false,
+                    }
+                })
+        }
+        syn::Stmt::Expr(syn::Expr::Return(_), _) => true,
+        _ => false,
+    }
 }
 
 fn is_assertion_macro(path: &syn::Path) -> bool {
@@ -1348,6 +1448,70 @@ mod tests {
         assert!(
             !findings.is_empty(),
             "an unresolvable subject must be reported rather than assumed equal"
+        );
+    }
+
+    /// Regression: deleting a failure guard produced no finding at all. The
+    /// test still compiled and passed, so red/green could not see it either.
+    #[test]
+    fn a_deleted_failure_guard_is_reported() {
+        let base = "#[test]\nfn t() {\n    let r = parse(\"x\");\n    if r.is_err() {\n        panic!(\"expected a number\");\n    }\n    assert_eq!(r.unwrap(), 1);\n}\n";
+        let head =
+            "#[test]\nfn t() {\n    let r = parse(\"x\");\n    assert_eq!(r.unwrap(), 1);\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            rules(&findings).contains(&"removed_error_check"),
+            "a deleted guard removes a check and must be reported, got {:?}",
+            rules(&findings)
+        );
+        let reported = findings
+            .iter()
+            .find(|f| f.rule == "removed_error_check")
+            .expect("the finding");
+        assert_eq!(reported.severity, Severity::High);
+        assert!(
+            reported.message.contains("still compiles and passes"),
+            "the message should explain why red/green cannot see this, got {}",
+            reported.message
+        );
+    }
+
+    /// A guard that survives is not a finding.
+    #[test]
+    fn an_unchanged_guard_is_not_reported() {
+        let source = "#[test]\nfn t() {\n    let r = parse(\"x\");\n    if r.is_err() {\n        panic!(\"bad\");\n    }\n    assert_eq!(r.unwrap(), 1);\n}\n";
+        assert!(
+            analyze(source, source).is_empty(),
+            "an unchanged guard is not a change"
+        );
+    }
+
+    /// The dangerous direction: a guard whose *condition* changed is a changed
+    /// check, not a removed one, and the assertion rules already handle it. It
+    /// must not also be reported as a removal, or one edit becomes two findings.
+    #[test]
+    fn a_reworded_guard_is_not_a_removal() {
+        let base = "#[test]\nfn t() {\n    if a.is_err() {\n        panic!(\"one\");\n    }\n}\n";
+        let head = "#[test]\nfn t() {\n    if a.is_err() {\n        panic!(\"two\");\n    }\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            !rules(&findings).contains(&"removed_error_check"),
+            "the guard condition is unchanged, so it is not removed, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// An `assert!` inside an `if` is an assertion, not a guard. Counting it as
+    /// both would report one deletion twice.
+    #[test]
+    fn an_assertion_inside_an_if_is_not_a_guard() {
+        let base = "#[test]\nfn t() {\n    if flag {\n        assert_eq!(x, 1);\n    }\n}\n";
+        let head = "#[test]\nfn t() {\n}\n";
+        let findings = analyze(base, head);
+        assert!(
+            !rules(&findings).contains(&"removed_error_check"),
+            "an assertion is tracked by the assertion rules, got {:?}",
+            rules(&findings)
         );
     }
 

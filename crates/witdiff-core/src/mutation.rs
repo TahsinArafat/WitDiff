@@ -85,6 +85,17 @@ pub enum Operator {
     LogicalFlip,
     /// `true` <-> `false`.
     BooleanFlip,
+    /// `!x` <-> `x`: negating a condition, or removing a negation.
+    ///
+    /// Both directions are mutated because either can hide a bug: dropping a
+    /// `!` inverts a guard, and adding one inverts an expectation.
+    ConditionNegation,
+    /// A numeric literal changed to a neighbouring value.
+    ///
+    /// `0` <-> `1` is the highest-value pair, because off-by-one boundaries are
+    /// the classic untested case. The literal is replaced by its successor, or
+    /// by `0` when it is already `1`, so the pair is always distinct.
+    NumericSubstitution,
 }
 
 impl Operator {
@@ -94,6 +105,8 @@ impl Operator {
             Operator::ComparisonBoundary => "comparison_boundary",
             Operator::LogicalFlip => "logical_flip",
             Operator::BooleanFlip => "boolean_flip",
+            Operator::ConditionNegation => "condition_negation",
+            Operator::NumericSubstitution => "numeric_substitution",
         }
     }
 }
@@ -251,6 +264,13 @@ impl ExprCollector<'_> {
             .any(|(region_start, region_end)| start >= *region_start && end <= *region_end)
     }
 
+    /// The original source text of a span, for building a replacement that must
+    /// be valid source rather than a rendered token stream.
+    fn source_text(&self, span: proc_macro2::Span) -> Option<String> {
+        let (start, end) = self.offset_range(span)?;
+        self.source.get(start..end).map(str::to_owned)
+    }
+
     fn offset_range(&self, span: proc_macro2::Span) -> Option<(usize, usize)> {
         Some((
             line_col_to_offset(self.source, span.start())?,
@@ -287,13 +307,46 @@ impl ExprCollector<'_> {
     fn visit_expression(&mut self, expression: &Expr) {
         match expression {
             Expr::Binary(binary) => self.visit_binary(binary),
-            Expr::Lit(literal) => {
-                if let Lit::Bool(value) = &literal.lit {
+            Expr::Lit(literal) => match &literal.lit {
+                Lit::Bool(value) => {
                     let replacement = if value.value { "false" } else { "true" };
                     self.consider(value.span(), Operator::BooleanFlip, replacement.to_owned());
                 }
+                Lit::Int(value) => {
+                    // Off-by-one on an integer literal: `0` becomes `1` and any
+                    // other value becomes `0`, so the mutant always differs and
+                    // the pair covers the boundary case that tests most often
+                    // miss.
+                    if let Ok(number) = value.base10_parse::<i64>() {
+                        let replacement = if number == 0 { "1" } else { "0" };
+                        self.consider(
+                            value.span(),
+                            Operator::NumericSubstitution,
+                            replacement.to_owned(),
+                        );
+                    }
+                }
+                _ => {}
+            },
+            Expr::Unary(unary) => {
+                // A leading `!` can be removed, and any other expression can be
+                // negated. Mutating only the removal direction would miss a
+                // guard that gained a `!`, which inverts its behavior.
+                // The replacement must be valid source, because `consider`
+                // replaces the original span text verbatim. `render` inserts
+                // spaces between tokens (`compute ()`), so the operand is taken
+                // from the source instead.
+                let operand = self.source_text(unary.expr.span());
+                if let Some(operand) = operand {
+                    let replacement = if matches!(unary.op, syn::UnOp::Not(_)) {
+                        operand
+                    } else {
+                        format!("!{operand}")
+                    };
+                    self.consider(unary.span(), Operator::ConditionNegation, replacement);
+                }
+                self.visit_expression(&unary.expr);
             }
-            Expr::Unary(unary) => self.visit_expression(&unary.expr),
             Expr::Paren(paren) => self.visit_expression(&paren.expr),
             Expr::Call(call) => {
                 for argument in &call.args {
@@ -308,6 +361,20 @@ impl ExprCollector<'_> {
                 self.visit_expression(&method.receiver);
             }
             Expr::If(branch) => {
+                // Negating a condition is the classic mutation, and the
+                // condition is the one place adding a `!` is always valid
+                // syntax. Only the *addition* is generated here: removing an
+                // existing `!` is handled by the Unary arm, so generating both
+                // at the same span would produce a duplicate.
+                if let Some(condition) = self.source_text(branch.cond.span()) {
+                    if !condition.starts_with('!') {
+                        self.consider(
+                            branch.cond.span(),
+                            Operator::ConditionNegation,
+                            format!("!({condition})"),
+                        );
+                    }
+                }
                 self.visit_expression(&branch.cond);
                 for statement in &branch.then_branch.stmts {
                     self.visit_statement(statement);
@@ -333,6 +400,15 @@ impl ExprCollector<'_> {
                 }
             }
             Expr::While(looped) => {
+                if let Some(condition) = self.source_text(looped.cond.span()) {
+                    if !condition.starts_with('!') {
+                        self.consider(
+                            looped.cond.span(),
+                            Operator::ConditionNegation,
+                            format!("!({condition})"),
+                        );
+                    }
+                }
                 self.visit_expression(&looped.cond);
                 for statement in &looped.body.stmts {
                     self.visit_statement(statement);
@@ -501,20 +577,32 @@ mod tests {
     #[test]
     fn equality_flip_is_generated() {
         let found = mutants("pub fn f(a: i32) -> bool { a == 1 }\n");
-        assert_eq!(operators(&found), vec!["equality_flip"]);
-        assert_eq!(found[0].original, "==");
-        assert_eq!(found[0].replacement, "!=");
+        // The literal also produces a numeric_substitution mutant, so the
+        // equality flip is located rather than assumed to be the only one.
+        let flip = found
+            .iter()
+            .find(|m| m.operator == "equality_flip")
+            .expect("an equality flip");
+        assert_eq!(flip.original, "==");
+        assert_eq!(flip.replacement, "!=");
     }
 
     #[test]
     fn comparison_boundary_is_generated_both_ways() {
-        let less = mutants("pub fn f(a: i32) -> bool { a < 1 }\n");
-        assert_eq!(less[0].original, "<");
-        assert_eq!(less[0].replacement, "<=");
+        let boundary = |source: &str| {
+            mutants(source)
+                .into_iter()
+                .find(|m| m.operator == "comparison_boundary")
+                .expect("a boundary mutant")
+        };
 
-        let less_equal = mutants("pub fn f(a: i32) -> bool { a <= 1 }\n");
-        assert_eq!(less_equal[0].original, "<=");
-        assert_eq!(less_equal[0].replacement, "<");
+        let less = boundary("pub fn f(a: i32) -> bool { a < 1 }\n");
+        assert_eq!(less.original, "<");
+        assert_eq!(less.replacement, "<=");
+
+        let less_equal = boundary("pub fn f(a: i32) -> bool { a <= 1 }\n");
+        assert_eq!(less_equal.original, "<=");
+        assert_eq!(less_equal.replacement, "<");
     }
 
     #[test]
@@ -526,6 +614,77 @@ mod tests {
         let boolean = mutants("pub fn f() -> bool { true }\n");
         assert_eq!(operators(&boolean), vec!["boolean_flip"]);
         assert_eq!(boolean[0].replacement, "false");
+    }
+
+    /// Negating a condition, in both directions: dropping a `!` inverts a
+    /// guard, and adding one inverts an expectation. Mutating only one
+    /// direction would miss half the cases.
+    #[test]
+    fn condition_negation_is_generated_both_ways() {
+        let negated = mutants("pub fn f(a: bool) -> bool { !a }\n");
+        let removed = negated
+            .iter()
+            .find(|m| m.operator == "condition_negation")
+            .expect("a negation mutant");
+        assert_eq!(removed.original, "!a");
+        assert_eq!(
+            removed.replacement, "a",
+            "dropping a negation must be generated"
+        );
+
+        // Adding a negation is generated where it is always valid syntax and
+        // always changes control flow: an `if` condition.
+        let with_if = mutants("pub fn f(a: bool) -> bool { if a { true } else { false } }\n");
+        let added = with_if
+            .iter()
+            .find(|m| m.operator == "condition_negation")
+            .expect("a negation mutant on the condition");
+        assert_eq!(added.original, "a");
+        assert_eq!(
+            added.replacement, "!(a)",
+            "negating a condition must be generated"
+        );
+    }
+
+    /// An integer literal becomes a neighbour, so an off-by-one boundary that
+    /// no test covers is surfaced. `0` and `1` form the pair because that is
+    /// the boundary tests most often miss.
+    #[test]
+    fn numeric_substitution_moves_an_integer_literal() {
+        let zero = mutants("pub fn f() -> i32 { 0 }\n");
+        let mutant = zero
+            .iter()
+            .find(|m| m.operator == "numeric_substitution")
+            .expect("a numeric mutant");
+        assert_eq!(mutant.original, "0");
+        assert_eq!(mutant.replacement, "1");
+
+        let other = mutants("pub fn f() -> i32 { 7 }\n");
+        let to_zero = other
+            .iter()
+            .find(|m| m.operator == "numeric_substitution")
+            .expect("a numeric mutant");
+        assert_eq!(to_zero.replacement, "0");
+    }
+
+    /// The mutant must always differ from the original, or applying it would be
+    /// a no-op that silently reports a survivor.
+    #[test]
+    fn every_generated_mutant_changes_the_source() {
+        for source in [
+            "pub fn f() -> i32 { 0 }\n",
+            "pub fn f(a: bool) -> bool { !a }\n",
+            "pub fn f(a: bool) -> bool { a }\n",
+            "pub fn f(a: i32) -> bool { a == 1 }\n",
+        ] {
+            for mutant in mutants(source) {
+                assert_ne!(
+                    mutant.original, mutant.replacement,
+                    "{} on {:?} would be a no-op",
+                    mutant.operator, mutant.original
+                );
+            }
+        }
     }
 
     /// The guarantee that makes a mutation result meaningful: the oracle is
@@ -566,12 +725,17 @@ mod tests {
     fn only_changed_lines_are_mutated() {
         let source = "pub fn untouched(a: i32) -> bool { a == 1 }\n\npub fn changed(a: i32) -> bool { a != 2 }\n";
         let found = mutants_for_file("src/lib.rs", source, &[3], &[]);
-        assert_eq!(
-            found.len(),
-            1,
-            "only the changed line should produce mutants, got {found:?}"
+        assert!(!found.is_empty(), "the changed line should produce mutants");
+        assert!(
+            found
+                .iter()
+                .all(|m| m.function.as_deref() == Some("changed")),
+            "only the changed function may be mutated, got {found:?}"
         );
-        assert_eq!(found[0].function.as_deref(), Some("changed"));
+        assert!(
+            found.iter().all(|m| m.line == 3),
+            "only the changed line may be mutated, got {found:?}"
+        );
     }
 
     #[test]
@@ -631,8 +795,11 @@ mod tests {
     fn mutation_after_multibyte_text_uses_the_right_span() {
         let source = "// café ✓\npub fn f(a: i32) -> bool { a == 1 }\n";
         let found = mutants(source);
-        assert_eq!(found.len(), 1, "got {found:?}");
-        let mutated = found[0].apply(source).expect("span should match");
+        let mutant = found
+            .iter()
+            .find(|m| m.operator == "equality_flip")
+            .expect("an equality flip");
+        let mutated = mutant.apply(source).expect("span should match");
         assert_eq!(
             mutated, "// café ✓\npub fn f(a: i32) -> bool { a != 1 }\n",
             "the mutation must land on the operator, not inside the comment"
