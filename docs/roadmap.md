@@ -66,7 +66,7 @@ ADR-0011.
 - [x] pytest (failure classification and structural integrity analysis)
 - [x] Go test (failure classification and structural integrity analysis)
 - [x] Java / JUnit (failure classification and structural integrity analysis)
-- [x] Ruby / Minitest (failure classification and structural integrity analysis)
+- [x] Ruby / Minitest / RSpec (failure classification and structural integrity analysis)
 - [x] Vitest/Jest (failure classification only)
 - [x] test framework capability trait (classification and optional targeted invocation)
 - [x] framework-specific failure classification
@@ -86,9 +86,6 @@ Still open:
 - **JavaScript/TypeScript integrity analysis.** Node ships no parser, so this
   needs its own decision rather than following the Go and Java shape; see the
   support matrix.
-- **RSpec's `expect(x).to` normalization**, which needs tests against real RSpec
-  output; RSpec is recognized for classification but its assertion shape is not
-  yet parsed.
 - **Targeted invocation** for non-Rust frameworks, so the full suite runs and
   the receipt says `full_suite`.
 - **Mutation** outside Rust; the operators are defined over Rust syntax.

@@ -183,11 +183,18 @@ Detected: `removed_assertion`, `weakened_assertion`, `changed_expected_value`,
 Verified end to end that `assert_equal 2, add(1, 1)` becoming `assert true` is
 reported.
 
-**RSpec's `expect(x).to eq(y)` shape is not yet normalized.** RSpec is
-recognized for failure classification and by `init`, but the analyzer handles
-the Minitest-style `assert_*` and `refute_*` families. An RSpec file therefore
-produces few or no findings rather than wrong ones, and this is a real gap
-rather than an implied capability.
+**RSpec is supported too.** `expect(x).to eq(y)` and `expect(x).not_to eq(y)`
+normalize to the same canonical subject-first form as Minitest, so a project
+using either style gets the same rules. RSpec examples are `it "..." do` blocks
+rather than `def`, so they need their own collection, and both styles share one
+body extraction so the two forms cannot drift in what they detect.
+
+Verified against `Ripper.sexp` rather than a live RSpec run: RSpec could not be
+installed in the development environment (`gem install` is blocked), so the
+normalization is verified against the parser's own output for every form, and
+the end-to-end tests exercise the analyzer end to end with RSpec sources. A
+predicate matcher such as `be_truthy` normalizes to the subject alone, since that
+is what it checks.
 
 Recognized output, verified against real runs:
 

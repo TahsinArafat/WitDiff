@@ -130,3 +130,67 @@ fn a_new_file_produces_no_comparative_findings() {
         rules(&findings)
     );
 }
+
+/// RSpec examples are `it "..." do` blocks, not `def`, and normalize to the
+/// same canonical subject-first form as Minitest. Verified against
+/// `Ripper.sexp`: the node is a `[:method_add_block, [:command, [:@ident, "it"],
+/// ...]]`, so the example name and the matcher both had to be read from the
+/// tree rather than assumed.
+#[test]
+#[ignore = "end-to-end: spawns the Ruby interpreter; run with -- --ignored"]
+fn rspec_expectations_are_normalized() {
+    let base = "RSpec.describe \"Calc\" do\n  it \"adds\" do\n    expect(add(1, 1)).to eq(2)\n  end\nend\n";
+    let head = "RSpec.describe \"Calc\" do\n  it \"adds\" do\n    expect(add(1, 1)).to eq(3)\n  end\nend\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        rules(&findings).contains(&"changed_expected_value"),
+        "an RSpec expectation change must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// The two assertion styles must produce comparable canonical forms, or a
+/// project migrating from one to the other would look like it removed every
+/// check.
+#[test]
+#[ignore = "end-to-end: spawns the Ruby interpreter; run with -- --ignored"]
+fn minitest_and_rspec_normalize_to_the_same_form() {
+    let minitest = "require \"minitest/autorun\"\n\nclass CalcTest < Minitest::Test\n  def test_adds\n    assert_equal 2, add(1, 1)\n  end\nend\n";
+    let rspec = "RSpec.describe \"Calc\" do\n  it \"adds\" do\n    expect(add(1, 1)).to eq(2)\n  end\nend\n";
+    let from_minitest = analyze(Some(minitest), minitest);
+    let from_rspec = analyze(Some(rspec), rspec);
+
+    assert!(
+        from_minitest.is_empty() && from_rspec.is_empty(),
+        "neither style should report on itself; minitest={:?} rspec={:?}",
+        rules(&from_minitest),
+        rules(&from_rspec)
+    );
+
+    // The same expectation expressed in RSpec must be seen as unchanged when
+    // a Minitest file keeps its own: each is compared only against itself.
+    let modified = rspec.replace("eq(2)", "eq(4)");
+    let changed = analyze(Some(rspec), &modified);
+    assert!(
+        rules(&changed).contains(&"changed_expected_value"),
+        "a changed RSpec expectation must be reported, got {:?}",
+        rules(&changed)
+    );
+}
+
+/// `not_to eq` is an inequality expectation, and must normalize as such rather
+/// than as a bare predicate.
+#[test]
+#[ignore = "end-to-end: spawns the Ruby interpreter; run with -- --ignored"]
+fn a_negated_rspec_expectation_is_an_inequality() {
+    let base =
+        "RSpec.describe \"Calc\" do\n  it \"rejects\" do\n    expect(x).not_to eq(3)\n  end\nend\n";
+    let head =
+        "RSpec.describe \"Calc\" do\n  it \"rejects\" do\n    expect(x).not_to eq(4)\n  end\nend\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        rules(&findings).contains(&"changed_expected_value"),
+        "a changed negated expectation must be reported, got {:?}",
+        rules(&findings)
+    );
+}

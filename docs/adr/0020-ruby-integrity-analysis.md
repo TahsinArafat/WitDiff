@@ -1,6 +1,6 @@
 # ADR-0020: Ruby integrity analysis via `ripper`
 
-Status: accepted
+Status: accepted; RSpec support added after first publication
 
 ## Context
 
@@ -83,6 +83,6 @@ shared rule engine doing the comparison.
   1), 2`, which have opposite meanings.
 - **Compare the failure message.** Rejected: a reworded message would be a false
   `changed_expected_value` and an inverted expectation would be missed.
-- **Handle RSpec's `expect(...).to` in the same change.** Deferred, not
-  rejected: it is a different assertion shape and deserves its own tests against
-  real RSpec output, which is not installed in this environment.
+- **Handle RSpec's `expect(...).to` in the same change.** Chosen instead, after
+  establishing that `ripper` parses the forms reliably and that normalizing them
+  to the Minitest form costs one shared code path rather than a second rule set.

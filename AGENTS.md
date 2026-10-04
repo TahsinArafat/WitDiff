@@ -2,7 +2,7 @@
 
 This file is the authoritative entry point for coding agents working in this repository. Read it before editing code. Then read `docs/product.md`, `docs/architecture.md`, and `docs/verification-model.md`.
 
-For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis works for Rust, Python, Go, Java and Minitest Ruby; that JavaScript has classification but no analysis, and Ruby's RSpec shape is not yet parsed; and that the line-based fallback matches Rust syntax exclusively.
+For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis works for Rust, Python, Go, Java and Ruby (Minitest and RSpec); that JavaScript has classification but no analysis; and that the line-based fallback matches Rust syntax exclusively.
 
 Structural analyzers share one rule engine, `witdiff_core::testshape`. Add a language by supplying a summary and an operator vocabulary, not by copying rules.
 
@@ -76,9 +76,10 @@ cargo run -p witdiff -- verify --base HEAD~1
 
 Read `docs/roadmap.md`. High-value tasks currently are:
 
-1. RSpec's `expect(x).to` normalization for Ruby, and structural integrity
-   analysis for JavaScript — the latter needs its own decision because Node
-   ships no parser (see the support matrix);
+1. structural integrity analysis for JavaScript, which needs its own decision
+   because Node ships no parser (see the support matrix). Also worth running an
+   RSpec install end to end: the normalization is verified against ripper's
+   output, not a live RSpec run, because `gem install` is blocked here;
 2. the signed-receipt **signature** itself. Both prerequisites from ADR-0015 are
    done (`verification_digest`); what remains undecided is key management —
    per-developer, per-repository or per-CI-runner — and whether the goal is
