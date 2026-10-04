@@ -126,6 +126,84 @@ pub enum VerificationStatus {
     BaseIncompatible,
 }
 
+/// Whether a stored receipt still describes the working state.
+///
+/// A receipt is a claim about a revision. Nothing stops the code changing
+/// afterwards, and until now `witdiff receipt` printed a stored receipt without
+/// checking — measured: a receipt claiming head `8f4e5f2e` was printed while the
+/// actual head was `62ec3f5`, with no warning. A reader had to notice the
+/// mismatch themselves, and nothing in the output encouraged them to look
+/// (ADR-0015 finding 3, backlog PG-504).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiptFreshness {
+    /// The receipt describes the current state.
+    Current,
+    /// The working state has moved on since the receipt was written.
+    Stale { reasons: Vec<String> },
+    /// Whether the receipt is current could not be determined.
+    ///
+    /// Distinct from `Current`: an unverifiable receipt must not be presented as
+    /// though it had been checked.
+    Unknown { reason: String },
+}
+
+impl Receipt {
+    /// Check whether this receipt still describes the repository's state.
+    ///
+    /// Two independent checks, because either alone can miss a real change:
+    ///
+    /// - the head commit, which catches a new commit;
+    /// - the workspace fingerprint, which catches uncommitted edits that the
+    ///   head commit cannot see.
+    ///
+    /// The uncommitted case is the common one: a receipt written for a change,
+    /// then the change edited, keeps the same `head_commit` while describing
+    /// code that no longer exists.
+    pub fn freshness(&self, head_commit: &str, fingerprint: &str) -> ReceiptFreshness {
+        let mut reasons = Vec::new();
+        if self.head_commit != head_commit {
+            reasons.push(format!(
+                "the receipt was written for {} but HEAD is now {}",
+                short(&self.head_commit),
+                short(head_commit)
+            ));
+        }
+        if self.workspace_fingerprint_after != fingerprint {
+            reasons.push("the workspace has changed since the receipt was written".to_owned());
+        }
+        if reasons.is_empty() {
+            ReceiptFreshness::Current
+        } else {
+            ReceiptFreshness::Stale { reasons }
+        }
+    }
+}
+
+/// The first twelve characters of a digest, for readable messages.
+fn short(value: &str) -> &str {
+    value.get(..12).unwrap_or(value)
+}
+
+impl ReceiptFreshness {
+    pub fn is_current(&self) -> bool {
+        matches!(self, Self::Current)
+    }
+
+    /// A one-line summary for human output, or `None` when current.
+    pub fn warning(&self) -> Option<String> {
+        match self {
+            Self::Current => None,
+            Self::Stale { reasons } => Some(format!(
+                "this receipt is stale and no longer describes the working state: {}",
+                reasons.join("; ")
+            )),
+            Self::Unknown { reason } => Some(format!(
+                "whether this receipt still describes the working state could not be determined: {reason}"
+            )),
+        }
+    }
+}
+
 /// How a verification status should be treated as a gate.
 ///
 /// Three classes rather than two, because "no proof was attempted" is not the
@@ -764,5 +842,111 @@ mod remediation_tests {
         assert!(VerificationStatus::NotVerified.is_problem());
         assert!(VerificationStatus::HeadFailed.is_problem());
         assert!(VerificationStatus::BaseIncompatible.is_problem());
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::*;
+
+    fn receipt_at(head: &str, fingerprint: &str) -> Receipt {
+        // Only the fields the freshness check reads need to be meaningful; the
+        // rest is filled from a minimal valid receipt so the test states its
+        // intent rather than its boilerplate.
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "witdiff.receipt.v1",
+            "generated_at": "2024-01-01T00:00:00Z",
+            "status": "verified",
+            "repo_root": "/repo",
+            "base": "HEAD~1",
+            "head_commit": head,
+            "workspace_fingerprint_before": fingerprint,
+            "workspace_fingerprint_after": fingerprint,
+            "evidence_fresh": true,
+            "changed_files": [],
+            "changed_test_files": [],
+            "integrity_findings": [],
+            "head_run": {
+                "command": ["cargo", "test"], "cwd": "/repo", "success": true,
+                "exit_code": 0, "duration_ms": 1, "stdout": "", "stderr": "",
+                "failure_kind": null
+            },
+            "base_run": null,
+            "red_green_proven": true,
+            "notes": []
+        }))
+        .expect("the fixture must be a valid receipt")
+    }
+
+    #[test]
+    fn an_unchanged_state_is_current() {
+        let receipt = receipt_at("abc123", "fingerprint");
+        assert_eq!(
+            receipt.freshness("abc123", "fingerprint"),
+            ReceiptFreshness::Current
+        );
+        assert!(receipt
+            .freshness("abc123", "fingerprint")
+            .warning()
+            .is_none());
+    }
+
+    /// The common case: the change is edited after verification. `head_commit`
+    /// is unchanged, so only the fingerprint catches it.
+    #[test]
+    fn an_uncommitted_edit_makes_a_receipt_stale() {
+        let receipt = receipt_at("abc123", "fingerprint");
+        let freshness = receipt.freshness("abc123", "different");
+        assert!(!freshness.is_current());
+        let warning = freshness.warning().expect("a stale receipt must warn");
+        assert!(
+            warning.contains("workspace has changed"),
+            "the reason should name the workspace, got {warning}"
+        );
+    }
+
+    /// A new commit after verification.
+    #[test]
+    fn a_new_commit_makes_a_receipt_stale() {
+        let receipt = receipt_at("abc123def456", "fingerprint");
+        let freshness = receipt.freshness("999888777666", "fingerprint");
+        assert!(!freshness.is_current());
+        let warning = freshness.warning().expect("a stale receipt must warn");
+        assert!(
+            warning.contains("HEAD is now"),
+            "the reason should name the new head, got {warning}"
+        );
+    }
+
+    /// Both signals are reported, because either alone can miss a change and a
+    /// reader should see everything that moved.
+    #[test]
+    fn both_signals_are_reported() {
+        let receipt = receipt_at("abc123", "fingerprint");
+        let warning = receipt
+            .freshness("different", "different")
+            .warning()
+            .expect("stale");
+        assert!(warning.contains("HEAD is now"), "got {warning}");
+        assert!(warning.contains("workspace has changed"), "got {warning}");
+    }
+
+    /// An unverifiable receipt must not be presented as though it were checked.
+    #[test]
+    fn unknown_is_not_current() {
+        let unknown = ReceiptFreshness::Unknown {
+            reason: "git is unavailable".to_owned(),
+        };
+        assert!(!unknown.is_current());
+        assert!(unknown.warning().is_some());
+    }
+
+    /// Short hashes keep the message readable and must not panic on a short or
+    /// empty value.
+    #[test]
+    fn short_hashes_are_safe() {
+        assert_eq!(short("abcdefghijklmnop"), "abcdefghijkl");
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short(""), "");
     }
 }

@@ -84,8 +84,7 @@ Read `docs/roadmap.md`. High-value tasks currently are:
    parser;
 4. the signed-receipt prerequisites in ADR-0015: a content digest over the
    verified inputs, then a checkable binding from receipt to revision. Key
-   management is an open question and must be settled before implementation;
-5. reporting a stale stored receipt (PG-504).
+   management is an open question and must be settled before implementation.
 
 Integration tests, syntax-aware integrity analysis including `match`-arm
 comparison, targeted test selection, inline `#[cfg(test)]` transplantation

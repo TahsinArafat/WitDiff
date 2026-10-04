@@ -243,11 +243,8 @@ non-repudiation) are open questions that must be decided before implementation.
 
 ### PG-504: report when a stored receipt is stale
 
-`witdiff receipt` prints a stored receipt without checking whether it still
-describes the working state. Measured: a receipt claiming head `8f4e5f2e` was
-printed unchanged while the actual head was `62ec3f5`, with no warning.
-
-This is independent of signing and is a straightforward usability defect. A
-reader has to notice the mismatch themselves, and nothing in the output
-encourages them to look. The fix is to compare the receipt's `head_commit` and
-workspace digest against the current state and report divergence explicitly.
+Status: done. `witdiff receipt` compares the receipt's `head_commit` and
+workspace fingerprint against the current state and reports divergence, in both
+the human and `--json` forms. Two checks are needed because either alone misses
+a change: the head commit catches a new commit, the fingerprint catches
+uncommitted edits. An unverifiable check reports unknown rather than current.

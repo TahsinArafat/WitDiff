@@ -487,10 +487,45 @@ fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> 
     let bytes = fs::read(&path).with_context(|| format!("failed reading {}", path.display()))?;
     let receipt: Receipt = serde_json::from_slice(&bytes)
         .with_context(|| format!("invalid receipt {}", path.display()))?;
+
+    // A stored receipt is a claim about a revision, and nothing stops the code
+    // changing afterwards. Checking is the difference between a reader knowing
+    // the evidence is stale and having to notice a mismatched hash themselves.
+    let freshness = match (
+        repo.head_commit(),
+        repo.workspace_fingerprint(&receipt.base),
+    ) {
+        (Ok(head), Ok(fingerprint)) => receipt.freshness(&head, &fingerprint),
+        (Err(error), _) | (_, Err(error)) => witdiff_core::model::ReceiptFreshness::Unknown {
+            reason: format!("{error:#}"),
+        },
+    };
+
     if json {
-        println!("{}", serde_json::to_string_pretty(&receipt)?);
+        // The JSON form stays machine-stable and gains the check as an additive
+        // top-level field rather than changing the receipt document.
+        let mut document = serde_json::to_value(&receipt)?;
+        if let Some(object) = document.as_object_mut() {
+            object.insert(
+                "receipt_current".to_owned(),
+                serde_json::Value::Bool(freshness.is_current()),
+            );
+            if let Some(warning) = freshness.warning() {
+                object.insert(
+                    "receipt_warning".to_owned(),
+                    serde_json::Value::String(warning),
+                );
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&document)?);
     } else {
         print_receipt_summary(&receipt);
+        if let Some(warning) = freshness.warning() {
+            println!("  stale            : {warning}");
+            println!(
+                "  next             : re-run `witdiff verify` to produce evidence for the current state."
+            );
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

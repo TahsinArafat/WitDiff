@@ -26,6 +26,41 @@ Changes made after the first release are additive and optional within
 before a field existed still deserializes, and each new field defaults to the
 value that matches how such receipts were actually produced.
 
+## Staleness
+
+A receipt is a claim about a revision. Nothing stops the code changing
+afterwards, so `witdiff receipt` checks whether the stored receipt still
+describes the working state and says so when it does not:
+
+```text
+  stale            : this receipt is stale and no longer describes the working state:
+                     the receipt was written for 3a82c8dadd76 but HEAD is now df6af6db5326;
+                     the workspace has changed since the receipt was written
+  next             : re-run `witdiff verify` to produce evidence for the current state.
+```
+
+Two independent checks, because either alone misses a real change:
+
+- **the head commit**, which catches a new commit;
+- **the workspace fingerprint**, which catches uncommitted edits the head commit
+  cannot see.
+
+The uncommitted case is the common one: a receipt written for a change, then the
+change edited, keeps the same `head_commit` while describing code that no longer
+exists.
+
+`--json` adds two top-level fields alongside the receipt document rather than
+changing it, so `witdiff.receipt.v1` is unaffected:
+
+```json
+{ "receipt_current": false, "receipt_warning": "this receipt is stale ..." }
+```
+
+When the check cannot be performed — a missing Git binary, an unresolvable base
+ref — the result is reported as unknown rather than current, because a receipt
+that was not checked must not be presented as though it had been.
+
+
 ## Test selection
 
 - `test_selection`: `full_suite` or `targeted`, naming which variant produced
