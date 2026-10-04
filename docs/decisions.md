@@ -23,3 +23,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0017: Go integrity analysis uses `go/ast`, behind a shared rule engine
 - ADR-0018: Java integrity analysis uses the JDK's parser, swapping JUnit's
   argument order at the boundary
+- ADR-0019: a missing toolchain is reported, and installed only from the
+  project's own pin

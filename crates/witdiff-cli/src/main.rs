@@ -1,3 +1,5 @@
+mod toolchain;
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -70,6 +72,15 @@ enum Commands {
         /// (ADR-0013).
         #[arg(long)]
         fail_on_no_changed_tests: bool,
+        /// Try to obtain a missing test toolchain using the project's own
+        /// installer before verifying.
+        ///
+        /// Runs only an installer the repository already commits, such as a
+        /// Maven or Gradle wrapper, which downloads an exactly pinned
+        /// distribution. WitDiff never chooses a version itself and never runs
+        /// a package manager that executes project scripts (ADR-0019).
+        #[arg(long)]
+        install_toolchains: bool,
         /// Emit GitHub Actions workflow commands for the status and findings.
         ///
         /// Escaping is done here rather than in a workflow YAML file, so every
@@ -117,6 +128,7 @@ fn run() -> Result<ExitCode> {
             no_write,
             fail_on_no_changed_tests,
             github_annotations,
+            install_toolchains,
         } => verify(
             &start,
             VerifyArgs {
@@ -129,6 +141,7 @@ fn run() -> Result<ExitCode> {
                 no_write,
                 fail_on_no_changed_tests,
                 github_annotations,
+                install_toolchains,
             },
         ),
         Commands::Receipt { path, json } => receipt(&start, path, json),
@@ -264,6 +277,7 @@ struct VerifyArgs {
     no_write: bool,
     fail_on_no_changed_tests: bool,
     github_annotations: bool,
+    install_toolchains: bool,
 }
 
 fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
@@ -277,16 +291,65 @@ fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
         no_write,
         fail_on_no_changed_tests,
         github_annotations,
+        install_toolchains,
     } = args;
     let repo = GitRepo::discover(start)?;
     let config = Config::load(repo.root())?;
-    let command = command
-        .map(|text| {
-            let parts = shell_words::split(&text)
-                .with_context(|| format!("could not parse --command: {text}"))?;
-            CommandSpec::from_vec(parts)
-        })
-        .transpose()?;
+
+    // Installation happens before verification and only when asked for. The
+    // core never performs network access (invariant 4).
+    //
+    // A successful wrapper run also *replaces* the configured command with the
+    // wrapper. A real `mvnw` puts Maven on PATH for its own invocation only, so
+    // leaving the command as `mvn` would mean the tool is present but
+    // unreachable, and the run would fail for the same reason as before. The
+    // substitution is not silent: the receipt records the command that actually
+    // ran in `effective_test_command`.
+    let mut command_override = None;
+    if install_toolchains {
+        let configured_program = config.verification.test_command.first().cloned();
+        if let Some(program) = configured_program {
+            if command_exists(&program, &["--version"]) {
+                println!("  toolchain        : `{program}` is present");
+            } else {
+                println!(
+                    "  toolchain        : `{program}` is missing; looking for a project installer"
+                );
+                match toolchain::find_installer(repo.root(), &program) {
+                    Some(installer) => {
+                        println!("  toolchain        : running {}", installer.description);
+                        match toolchain::run_installer(&installer) {
+                            Ok(()) => {
+                                println!(
+                                    "  toolchain        : wrapper succeeded; using it for the test command"
+                                );
+                                command_override = installer.command_line();
+                            }
+                            Err(error) => {
+                                // A failed install is reported and verification
+                                // continues: it may still produce findings.
+                                println!("  toolchain        : installation failed ({error:#})");
+                            }
+                        }
+                    }
+                    None => println!(
+                        "  toolchain        : no project installer for `{program}`; install it manually"
+                    ),
+                }
+            }
+        }
+    }
+
+    let command = match command_override {
+        Some(parts) => Some(witdiff_core::CommandSpec::from_vec(parts)?),
+        None => command
+            .map(|text| {
+                let parts = shell_words::split(&text)
+                    .with_context(|| format!("could not parse --command: {text}"))?;
+                CommandSpec::from_vec(parts)
+            })
+            .transpose()?,
+    };
 
     let receipt = verify_repository(
         &repo,

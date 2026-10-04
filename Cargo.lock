@@ -813,6 +813,7 @@ dependencies = [
  "clap",
  "serde_json",
  "shell-words",
+ "tempfile",
  "toml",
  "witdiff-core",
 ]

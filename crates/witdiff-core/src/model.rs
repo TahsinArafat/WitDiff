@@ -157,6 +157,34 @@ impl GateOutcome {
     }
 }
 
+impl RunResult {
+    /// A run that never started, because the program does not exist.
+    ///
+    /// Represented rather than propagated as an error so a receipt is still
+    /// written. Aborting discards every finding computed before the run,
+    /// including integrity findings that never needed this program — which is
+    /// strictly less useful than a receipt saying the proof was not attempted
+    /// (ADR-0019).
+    pub fn not_started(command: &[String], cwd: &str, error: &str) -> Self {
+        Self {
+            command: command.to_vec(),
+            cwd: cwd.to_owned(),
+            success: false,
+            exit_code: None,
+            duration_ms: 0,
+            stdout: String::new(),
+            stderr: error.to_owned(),
+            failure_kind: Some(FailureKind::SpawnFailure),
+            timed_out: false,
+        }
+    }
+
+    /// Whether the program could not be started at all.
+    pub fn is_missing_program(&self) -> bool {
+        self.failure_kind == Some(FailureKind::SpawnFailure)
+    }
+}
+
 impl VerificationStatus {
     pub fn is_verified(&self) -> bool {
         matches!(self, Self::Verified | Self::VerifiedWithWarnings)

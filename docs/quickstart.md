@@ -54,6 +54,14 @@ Confirm that changed dedicated tests are listed as `T` and production files as `
 witdiff verify --base origin/main
 ```
 
+If the test tool is missing, WitDiff still writes a receipt with the integrity
+findings and tells you what to install. To have it try the project's own
+installer first (a committed `mvnw` or `gradlew`):
+
+```bash
+witdiff verify --install-toolchains
+```
+
 For an agent or CI gate:
 
 ```bash

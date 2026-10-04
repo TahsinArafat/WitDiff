@@ -10,6 +10,12 @@ base = "origin/main"
 # a broken invocation into a red/green proof. An unrecognized value is an error
 # rather than a silent fallback to the Rust classifier.
 framework = "cargo"
+
+# Note: if the test command's program is missing, WitDiff still writes a receipt
+# with the integrity findings and reports what to install. Pass
+# `--install-toolchains` to have it run the project's own installer first (a
+# committed mvnw or gradlew), which downloads the version the repository pins.
+# It never installs anything by default and never picks a version itself.
 test_command = ["cargo", "test", "--workspace", "--all-targets", "--all-features"]
 test_globs = [
   "tests/*.rs",

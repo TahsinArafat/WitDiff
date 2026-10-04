@@ -16,3 +16,6 @@ clap.workspace = true
 witdiff-core = { path = "../witdiff-core" }
 serde_json.workspace = true
 shell-words.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

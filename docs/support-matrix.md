@@ -177,7 +177,31 @@ property that made Python, Go and Java tractable: the parser ships with the
 runtime that already has to be present to run the tests, so the analysis costs
 no dependency and no extra install step.
 
-### The line-based fallback
+### When a toolchain is missing
+
+A verification needs the project's test command to run. When that program is
+absent, WitDiff still writes a receipt rather than aborting: the status is
+`not_verified`, `head_run.failure_kind` is `spawn_failure`, and every integrity
+finding is preserved, because those are computed before the run and do not
+depend on it.
+
+`--install-toolchains` additionally tries to obtain the missing program, but
+only from the project's own committed installer — a Java repository's `mvnw` or
+`gradlew`, which downloads an exactly pinned distribution. WitDiff never picks a
+version, and never runs `npm install`, `pip install` or `go install`, because
+those execute project-controlled scripts. See ADR-0019.
+
+For each ecosystem the practical fix when nothing is committed:
+
+| Ecosystem | Install |
+| --- | --- |
+| Rust | `rustup toolchain install` (honours `rust-toolchain.toml`) |
+| Python | `uv sync`, or `pip install -r requirements.txt` |
+| Node | `npm ci` |
+| Go | the toolchain self-installs the version in `go.mod` |
+| Java | commit `mvnw`/`gradlew`; otherwise install Maven or Gradle and a JDK |
+
+## The line-based fallback
 
 The fallback that exists for unparsable Rust files matches Rust macro syntax
 only:

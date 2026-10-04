@@ -1422,3 +1422,90 @@ fn the_default_framework_is_cargo() {
         .expect("the default framework must resolve");
     assert_eq!(framework, witdiff_core::framework::TestFramework::Cargo);
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0019: a missing test toolchain must not discard the run
+// ---------------------------------------------------------------------------
+
+/// The defect this ADR fixes: when the test command cannot start, the whole run
+/// used to abort with no receipt at all, discarding integrity findings that
+/// never needed that program.
+#[test]
+#[ignore = "end-to-end: spawns real commands; run with -- --ignored"]
+fn a_missing_test_command_still_produces_a_receipt() {
+    let fixture = Fixture::new(&[(
+        "src/lib.rs",
+        "pub fn is_even(value: i32) -> bool {\n    value % 2 != 0\n}\n",
+    )]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // A test that is weakened, plus a test command that cannot start.
+    fixture.write("tests/existing.rs", "#[test]\nfn t() { assert!(true); }\n");
+
+    let mut config = fixture_config();
+    config.verification.test_command = vec!["witdiff-definitely-not-a-real-program".to_owned()];
+
+    let receipt = fixture.verify(&config);
+
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::NotVerified,
+        "a proof that never ran is not verified; notes: {:?}",
+        receipt.notes
+    );
+    assert!(
+        receipt.head_run.is_missing_program(),
+        "the receipt must record that the program was absent, got {:?}",
+        receipt.head_run.failure_kind
+    );
+    assert_eq!(
+        receipt.head_run.exit_code, None,
+        "a program that never started has no exit code to report; a consumer \
+         must not read a null exit code as a failing test"
+    );
+    assert!(
+        !receipt.head_run.success,
+        "a run that did not start is not a success"
+    );
+    assert!(
+        receipt
+            .notes
+            .iter()
+            .any(|note| note.contains("was not found")),
+        "the note should name the missing program, got {:?}",
+        receipt.notes
+    );
+    assert!(
+        receipt.notes.iter().any(|note| note.contains("next:")),
+        "the developer needs an actionable next step, got {:?}",
+        receipt.notes
+    );
+}
+
+/// The point of writing a receipt anyway: findings that do not depend on the
+/// missing program are still delivered.
+#[test]
+#[ignore = "end-to-end: spawns real commands; run with -- --ignored"]
+fn integrity_findings_survive_a_missing_test_command() {
+    let fixture = Fixture::new(&[(
+        "src/lib.rs",
+        "pub fn is_even(value: i32) -> bool {\n    value % 2 != 0\n}\n",
+    )]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // Gut the test, then make the test command unrunnable.
+    fixture.write("tests/existing.rs", "#[test]\nfn t() { assert!(true); }\n");
+    let mut config = fixture_config();
+    config.verification.test_command = vec!["witdiff-definitely-not-a-real-program".to_owned()];
+
+    let receipt = fixture.verify(&config);
+
+    assert!(
+        !receipt.integrity_findings.is_empty(),
+        "findings computed before the run do not depend on the test command \
+         and must still be reported; notes: {:?}",
+        receipt.notes
+    );
+}

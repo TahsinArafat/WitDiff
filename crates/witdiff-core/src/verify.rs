@@ -6,6 +6,7 @@ use tempfile::TempDir;
 
 use crate::{
     config::Config,
+    framework::TestFramework,
     git::{GitRepo, WorktreeGuard},
     integrity::analyze_test_diff,
     model::{
@@ -108,13 +109,31 @@ pub fn verify_repository(
 
     let timeout = config.verification.timeout_secs.map(Duration::from_secs);
     let framework = config.verification.framework()?;
-    let head_run = run(
+    // A test command that cannot start must not discard the run: the receipt
+    // still carries every integrity finding, which was computed before this
+    // point and does not depend on the command (ADR-0019).
+    let mut missing_program: Option<String> = None;
+    let head_run = match run(
         &command,
         repo.root(),
         config.verification.max_output_bytes,
         timeout,
         framework,
-    )?;
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            let program = command.as_vec().first().cloned().unwrap_or_default();
+            if !is_missing_program_error(&error) {
+                return Err(error);
+            }
+            missing_program = Some(program);
+            RunResult::not_started(
+                &command.as_vec(),
+                &repo.root().display().to_string(),
+                &format!("{error:#}"),
+            )
+        }
+    };
 
     let mut splice_notes: Vec<String> = Vec::new();
     let mut spliced_inline_tests: Vec<SplicedInlineTests> = Vec::new();
@@ -128,10 +147,22 @@ pub fn verify_repository(
             config.verification.timeout_secs.unwrap_or_default()
         ));
     }
+    if let Some(program) = &missing_program {
+        notes.push(format!(
+            "the configured test command could not be started because `{program}` was not found. No proof was attempted, so the status is not_verified; the integrity findings above were still computed and do not depend on that program."
+        ));
+        if let Some(hint) = install_hint(program, config.verification.framework().ok()) {
+            notes.push(hint);
+        }
+    }
+
     let mut base_control_run = None;
     let mut base_run = None;
     let mut red_green_proven = false;
-    let mut status = if !head_run.success {
+    let mut status = if missing_program.is_some() {
+        // No experiment: a proof requires the command to run.
+        VerificationStatus::NotVerified
+    } else if !head_run.success {
         VerificationStatus::HeadFailed
     } else if inspect.changed_test_files.is_empty() && inspect.inline_test_hints.is_empty() {
         // With no dedicated test *and* no inline-test candidate there is
@@ -459,6 +490,56 @@ pub fn verify_repository(
         refused_inline_tests,
         mutation,
     })
+}
+
+/// A concrete install instruction for a missing program.
+///
+/// The developer is never left to work out what to do. The hint names the
+/// ecosystem's normal installer rather than a WitDiff-chosen version, because
+/// the repository is the authority on which version it needs (ADR-0019).
+fn install_hint(program: &str, framework: Option<TestFramework>) -> Option<String> {
+    let hint = match (framework, program) {
+        (Some(TestFramework::Cargo), _) => {
+            "install Rust with https://rustup.rs, or run `rustup toolchain install` if a pin is committed"
+        }
+        (Some(TestFramework::Pytest), _) => {
+            "install Python, or run `uv sync` / `pip install -r requirements.txt` to create the project's environment"
+        }
+        (Some(TestFramework::JavaScript), _) => {
+            "install Node.js (https://nodejs.org), or run `npm ci` to install the project's dependencies"
+        }
+        (Some(TestFramework::Go), _) => {
+            "install Go from https://go.dev/dl, or let the toolchain install the version named in go.mod by running `go version`"
+        }
+        (Some(TestFramework::Java), "mvn") => {
+            "this project has no Maven. Use the repository's wrapper (./mvnw) if one is committed, or install Maven from https://maven.apache.org"
+        }
+        (Some(TestFramework::Java), "gradle") => {
+            "this project has no Gradle. Use the repository's wrapper (./gradlew) if one is committed, or install Gradle from https://gradle.org"
+        }
+        (Some(TestFramework::Java), _) => {
+            "install a JDK from https://adoptium.net; the Java analyzer needs a JDK rather than a bare JRE"
+        }
+        (None, other) => return Some(format!(
+            "`{other}` was not found on PATH. Install it, or point verification.test_command at a command that exists."
+        )),
+    };
+    Some(format!("next: {hint}."))
+}
+
+/// Whether an error means the program could not be started at all.
+///
+/// Distinguished from a command that ran and failed: only the former is a
+/// missing toolchain, which is a fact about the environment rather than about
+/// the change (ADR-0019).
+fn is_missing_program_error(error: &anyhow::Error) -> bool {
+    for cause in error.chain() {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return io.kind() == std::io::ErrorKind::NotFound
+                || io.kind() == std::io::ErrorKind::PermissionDenied;
+        }
+    }
+    false
 }
 
 /// Whether a path is build output rather than source.
