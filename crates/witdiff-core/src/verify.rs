@@ -520,6 +520,9 @@ fn install_hint(program: &str, framework: Option<TestFramework>) -> Option<Strin
         (Some(TestFramework::Java), _) => {
             "install a JDK from https://adoptium.net; the Java analyzer needs a JDK rather than a bare JRE"
         }
+        (Some(TestFramework::Ruby), _) => {
+            "install Ruby from https://www.ruby-lang.org, then run `bundle install` to install the project's gems"
+        }
         (None, other) => return Some(format!(
             "`{other}` was not found on PATH. Install it, or point verification.test_command at a command that exists."
         )),

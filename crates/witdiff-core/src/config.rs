@@ -209,6 +209,58 @@ impl Config {
             return config;
         }
 
+        // Java before JavaScript: a project can have a package.json for
+        // front-end tooling while being a Maven or Gradle project, and the
+        // build file is the stronger signal.
+        if any_exists(&[
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+        ]) || exists("mvnw")
+            || exists("gradlew")
+        {
+            config.project.language = "java".into();
+            config.verification.framework = "java".into();
+            // Prefer the committed wrapper when there is one: it downloads the
+            // version the repository pins, and it is what a developer runs.
+            let uses_gradle = any_exists(&["build.gradle", "build.gradle.kts", "settings.gradle"])
+                || exists("gradlew");
+            // Use the committed wrapper when there is one, because it downloads
+            // the version the repository pins. Without a wrapper, name the plain
+            // tool: writing `./mvnw test` in a project that has no `mvnw` would
+            // hand the developer a command that cannot start.
+            let has_wrapper =
+                exists("gradlew") || exists("gradlew.bat") || exists("mvnw") || exists("mvnw.cmd");
+            config.verification.test_command = match (has_wrapper, uses_gradle) {
+                (true, true) => vec!["./gradlew".into(), "test".into()],
+                (true, false) => vec!["./mvnw".into(), "test".into()],
+                (false, true) => vec!["gradle".into(), "test".into()],
+                (false, false) => vec!["mvn".into(), "test".into()],
+            };
+            config.verification.test_globs =
+                vec!["src/test/**/*.java".into(), "**/src/test/**/*.java".into()];
+            config.verification.extra_test_paths = vec!["src/test".into()];
+            return config;
+        }
+
+        if any_exists(&["Gemfile", "Rakefile", ".rspec", "spec"]) {
+            config.project.language = "ruby".into();
+            // `rake test` is the conventional entry point; a project with an
+            // .rspec file is using RSpec.
+            let uses_rspec = exists(".rspec") || exists("spec");
+            config.verification.framework = if uses_rspec { "rspec" } else { "minitest" }.into();
+            config.verification.test_command = if uses_rspec {
+                vec!["bundle".into(), "exec".into(), "rspec".into()]
+            } else {
+                vec!["rake".into(), "test".into()]
+            };
+            config.verification.test_globs =
+                vec!["test/**/*_test.rb".into(), "spec/**/*_spec.rb".into()];
+            config.verification.extra_test_paths = vec!["test".into(), "spec".into()];
+            return config;
+        }
+
         if any_exists(&["package.json"]) {
             config.project.language = "javascript".into();
             config.verification.framework = "javascript".into();
@@ -402,8 +454,69 @@ mod inference_tests {
         );
     }
 
+    /// A Java project must not be told to run `cargo test`, which is what
+    /// happened before this was added: every language except Rust, Python, Go
+    /// and JavaScript fell through to the Rust defaults.
+    #[test]
+    fn java_projects_get_the_java_command() {
+        let maven = infer(&["pom.xml"]);
+        assert_eq!(maven.project.language, "java");
+        assert_eq!(maven.verification.framework, "java");
+        assert_eq!(maven.verification.test_command, vec!["mvn", "test"]);
+
+        let gradle = infer(&["build.gradle"]);
+        assert_eq!(gradle.project.language, "java");
+        assert_eq!(gradle.verification.test_command, vec!["gradle", "test"]);
+    }
+
+    /// A committed wrapper is preferred because it downloads the version the
+    /// repository pins, but naming it when it does not exist would hand the
+    /// developer a command that cannot start.
+    #[test]
+    fn a_committed_wrapper_is_preferred_over_the_plain_tool() {
+        let with_wrapper = infer(&["pom.xml", "mvnw"]);
+        assert_eq!(
+            with_wrapper.verification.test_command,
+            vec!["./mvnw", "test"],
+            "a committed wrapper is what a developer runs and is version-pinned"
+        );
+
+        let without = infer(&["pom.xml"]);
+        assert_eq!(
+            without.verification.test_command,
+            vec!["mvn", "test"],
+            "without a wrapper, ./mvnw would not exist"
+        );
+    }
+
+    /// A project can carry a package.json for front-end tooling while being a
+    /// JVM project; the build file is the stronger signal.
+    #[test]
+    fn a_jvm_build_file_wins_over_package_json() {
+        let config = infer(&["pom.xml", "package.json"]);
+        assert_eq!(
+            config.project.language, "java",
+            "a Maven project with front-end tooling is still a Maven project"
+        );
+    }
+
+    #[test]
+    fn ruby_projects_get_a_ruby_command() {
+        let rspec = infer(&[".rspec", "Gemfile"]);
+        assert_eq!(rspec.project.language, "ruby");
+        assert_eq!(rspec.verification.framework, "rspec");
+
+        let minitest = infer(&["Gemfile"]);
+        assert_eq!(minitest.project.language, "ruby");
+        assert_eq!(minitest.verification.framework, "minitest");
+    }
+
     /// Every inferred configuration must be usable as-is, or `init` would
     /// hand the developer something that fails immediately.
+    ///
+    /// The framework check is the important one: `init` previously wrote a
+    /// framework name the parser did not know, which would make every
+    /// subsequent command fail.
     #[test]
     fn every_inferred_configuration_is_valid() {
         for markers in [
@@ -411,6 +524,10 @@ mod inference_tests {
             vec!["pyproject.toml"],
             vec!["go.mod"],
             vec!["package.json"],
+            vec!["pom.xml"],
+            vec!["build.gradle"],
+            vec!["Gemfile"],
+            vec![".rspec"],
             vec!["README.md"],
         ] {
             let config = infer(&markers);

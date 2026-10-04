@@ -47,6 +47,8 @@ pub enum TestFramework {
     Go,
     /// Maven Surefire, Gradle test, and JUnit runners.
     Java,
+    /// Minitest and RSpec.
+    Ruby,
 }
 
 impl TestFramework {
@@ -58,6 +60,7 @@ impl TestFramework {
             TestFramework::JavaScript => "javascript",
             TestFramework::Go => "go",
             TestFramework::Java => "java",
+            TestFramework::Ruby => "ruby",
         }
     }
 
@@ -73,18 +76,20 @@ impl TestFramework {
             "jest" | "vitest" | "javascript" | "js" | "ts" => Some(TestFramework::JavaScript),
             "go" | "gotest" | "go test" => Some(TestFramework::Go),
             "java" | "junit" | "maven" | "mvn" | "gradle" => Some(TestFramework::Java),
+            "ruby" | "minitest" | "rspec" | "rake" => Some(TestFramework::Ruby),
             _ => None,
         }
     }
 
     /// Every framework WitDiff can classify, for diagnostics.
-    pub fn all() -> [TestFramework; 5] {
+    pub fn all() -> [TestFramework; 6] {
         [
             TestFramework::Cargo,
             TestFramework::Pytest,
             TestFramework::JavaScript,
             TestFramework::Go,
             TestFramework::Java,
+            TestFramework::Ruby,
         ]
     }
 
@@ -152,6 +157,15 @@ impl TestFramework {
                     || lower.contains("\nfail\t")
                     || lower.contains("panic:")
             }
+            TestFramework::Ruby => {
+                // Minitest prints "N runs, N assertions, N failures, N errors,
+                // N skips"; RSpec prints "N examples, N failures".
+                has_ruby_failure_count(lower)
+                    || lower.contains("minitest::assertion")
+                    || lower.contains("rspec::expectations")
+                    || lower.contains(") failure:")
+                    || lower.contains(") error:")
+            }
             TestFramework::Java => {
                 // Surefire's summary line, e.g.
                 // "Tests run: 2, Failures: 1, Errors: 0, Skipped: 0".
@@ -193,6 +207,12 @@ impl TestFramework {
                     || lower.contains("undefined:")
                     || lower.contains("# ") && lower.contains(".go:")
             }
+            TestFramework::Ruby => {
+                lower.contains("(loaderror)")
+                    || lower.contains("syntaxerror")
+                    || lower.contains("cannot load such file")
+                    || lower.contains("nameerror")
+            }
             TestFramework::Java => {
                 // Maven prints "COMPILATION ERROR" and Gradle prints
                 // "compileJava FAILED" or a Kotlin/Java compile error.
@@ -233,6 +253,44 @@ fn has_pytest_failed_count(lower: &str) -> bool {
                 > 0
             {
                 return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether a Ruby runner reports a non-zero failure or error count.
+///
+/// Minitest's summary is `1 runs, 1 assertions, 1 failures, 0 errors, 0 skips`
+/// and RSpec's is `2 examples, 1 failure`. A passing run reports zeros, so it
+/// must not match.
+fn has_ruby_failure_count(lower: &str) -> bool {
+    for line in lower.lines() {
+        let trimmed = line.trim();
+        // The summary line contains a count of runs or examples and at least
+        // one of the outcome counts.
+        if !(trimmed.contains(" runs,")
+            || trimmed.contains(" examples,")
+            || trimmed.starts_with("failures:"))
+        {
+            continue;
+        }
+        // Minitest writes "1 failures, 0 errors" and RSpec writes
+        // "1 failure" in the singular, so both forms are matched. A passing run
+        // reports zeros either way.
+        for label in [" failures", " failure", " errors", " error"] {
+            if let Some(index) = trimmed.find(label) {
+                let count: String = trimmed[..index]
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit() || *c == ' ')
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                if count.trim().parse::<u64>().unwrap_or(0) > 0 {
+                    return true;
+                }
             }
         }
     }
@@ -548,5 +606,73 @@ mod java_tests {
             );
         }
         assert_eq!(TestFramework::Java.as_str(), "java");
+    }
+}
+
+#[cfg(test)]
+mod ruby_tests {
+    use super::*;
+
+    /// Captured from a real `ruby t.rb` run using the minitest that ships in
+    /// Ruby's standard library.
+    #[test]
+    fn minitest_failure_is_recognized() {
+        let stdout = "Run options: --seed 34535\n\n# Running:\n\nF\n\nFinished in 0.000187s, 5347.5936 runs/s\n\n  1) Failure:\nCalcTest#test_adds [t.rb:5]:\nExpected: 3\n  Actual: 2\n\n1 runs, 1 assertions, 1 failures, 0 errors, 0 skips\n";
+        assert_eq!(
+            TestFramework::Ruby.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// The dangerous direction: a passing minitest run reports zeros and must
+    /// not be read as a failure, or a broken invocation could look like a proof.
+    #[test]
+    fn passing_minitest_run_is_not_a_test_failure() {
+        let stdout = "Finished in 0.000171s, 5847.9535 runs/s\n\n1 runs, 1 assertions, 0 failures, 0 errors, 0 skips\n";
+        assert_ne!(
+            TestFramework::Ruby.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// Captured from a real Ruby LoadError.
+    #[test]
+    fn a_ruby_load_error_is_a_compile_failure() {
+        let stderr = "kernel_require.rb:54:in `require': cannot load such file -- nope_missing (LoadError)\n";
+        assert_eq!(
+            TestFramework::Ruby.classify("", stderr, Some(1)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// RSpec's summary shape, which differs from Minitest's.
+    #[test]
+    fn rspec_failure_is_recognized() {
+        let stdout = "Failures:\n  1) Calc adds\n     Failure/Error: expect(add(1, 1)).to eq(3)\n\n2 examples, 1 failure\n";
+        assert_eq!(
+            TestFramework::Ruby.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn passing_rspec_run_is_not_a_test_failure() {
+        let stdout = "2 examples, 0 failures\n";
+        assert_ne!(
+            TestFramework::Ruby.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn ruby_names_parse() {
+        for name in ["ruby", "minitest", "rspec", "rake"] {
+            assert_eq!(
+                TestFramework::parse(name),
+                Some(TestFramework::Ruby),
+                "{name}"
+            );
+        }
+        assert_eq!(TestFramework::Ruby.as_str(), "ruby");
     }
 }

@@ -16,16 +16,16 @@ Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
 
 ## Matrix
 
-| | Rust | Python | Go | Java | JS/TS |
-| --- | --- | --- | --- | --- | --- |
-| **Red/green proof** | yes | yes | yes | yes | yes |
-| Failure classification | yes | yes | yes | yes | yes |
-| Compile-error vs test-failure | yes | yes | yes | yes | yes |
-| **Integrity findings (structural)** | yes | yes | yes | **yes** | no |
-| Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a | n/a |
-| **Mutation analysis** | yes | no | no | no | no |
-| Targeted test selection | yes | no | no | no | no |
-| `init` project detection | yes | yes | yes | yes | yes |
+| | Rust | Python | Go | Java | Ruby | JS/TS |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Red/green proof** | yes | yes | yes | yes | yes | yes |
+| Failure classification | yes | yes | yes | yes | yes | yes |
+| Compile-error vs test-failure | yes | yes | yes | yes | yes | yes |
+| **Integrity findings (structural)** | yes | yes | yes | yes | no | no |
+| Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a | n/a | n/a |
+| **Mutation analysis** | yes | no | no | no | no | no |
+| Targeted test selection | yes | no | no | no | no | no |
+| `init` project detection | yes | yes | yes | yes | yes | yes |
 
 "n/a" means the concept does not apply: inline test modules are a Rust idiom.
 Python, Go and JavaScript keep tests in separate files, which the whole-file
@@ -166,16 +166,34 @@ than guessed.
 
 | Language | Parser available without extra install? | What it would take |
 | --- | --- | --- |
-| **Ruby** | Yes — `ripper` ships in the standard library | Feasible, mirroring Go. Minitest and RSpec assertions differ in shape, so each needs its own vocabulary |
 | **TypeScript** | No — needs `typescript` in `node_modules` | Same problem as JavaScript. A TS project using Vitest does have `typescript` installed, so this is more tractable than plain JS |
 | **PHP** | Partially — `token_get_all` always ships; `ext-ast` does not | The tokenizer gives tokens, not a tree. Enough for line-based rules, not for the structural comparison the other languages get |
 | **.NET / C#** | Yes — Roslyn ships with the SDK | Feasible in principle, but Roslyn is a large API and the analysis would likely need a helper project rather than a single portable source file |
 | **ASP / ASP.NET** | n/a | A framework, not a test language. ASP.NET tests are xUnit/NUnit/MSTest, which are C# and covered by the .NET row |
 
-**Ruby is now the cheapest remaining addition**, because it has the same
-property that made Python, Go and Java tractable: the parser ships with the
-runtime that already has to be present to run the tests, so the analysis costs
-no dependency and no extra install step.
+**Ruby is now the cheapest remaining addition.** Failure classification is
+done — Minitest and RSpec are recognized, verified against real output from the
+minitest that ships in Ruby's standard library — and `ripper` ships in the same
+standard library, so the integrity analysis would cost no dependency. It needs
+its own operator vocabulary, since `assert_equal` and RSpec's `expect(...).to`
+have different shapes from the four languages already supported.
+
+## Ruby: classification without analysis
+
+Ruby has failure classification and `init` detection, but **no structural
+integrity analysis**. That is an unusual combination and worth stating plainly:
+a Ruby repository reaches `verified` and gets a correct proof, but no
+test-weakening findings.
+
+Recognized output, verified against real runs:
+
+- Minitest's `1 runs, 1 assertions, 1 failures, 0 errors, 0 skips`, including a
+  passing run that must not classify as a failure;
+- RSpec's `2 examples, 1 failure`, which uses the singular form;
+- Ruby's `LoadError`, which is a compile failure rather than a test failure.
+
+`init` writes `rake test` for a Minitest project and `bundle exec rspec` when an
+`.rspec` file or a `spec/` directory is present.
 
 ### When a toolchain is missing
 

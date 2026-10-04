@@ -64,18 +64,36 @@ Mutation is opt-in (`verification.mutation`) and supplementary: it never changes
 ## M4 — language adapters
 
 - [x] pytest (failure classification and structural integrity analysis)
-- [x] Vitest/Jest
 - [x] Go test (failure classification and structural integrity analysis)
+- [x] Java / JUnit (failure classification and structural integrity analysis)
+- [x] Ruby / Minitest / RSpec (failure classification only)
+- [x] Vitest/Jest (failure classification only)
 - [x] test framework capability trait (classification and optional targeted invocation)
 - [x] framework-specific failure classification
 
-Verified end to end against real toolchains: a pytest repository and a Go
-repository each reach `verified`, where before ADR-0012 the same pytest failure
-classified as `CommandFailure` and could not produce a proof.
+Verified end to end against real toolchains: pytest, Go and Java repositories
+each reach `verified` and report integrity findings, where before ADR-0012 the
+same pytest failure classified as `CommandFailure` and could not produce a proof
+at all.
 
-Not yet implemented: targeted invocation for non-Rust frameworks (the full suite
-runs, and the receipt says `full_suite`), and structure-aware integrity analysis
-and mutation, which remain Rust-only.
+Structural integrity analysis exists for **Rust (ADR-0006), Python (ADR-0016),
+Go (ADR-0017) and Java (ADR-0018)**. It shares one rule engine
+(`witdiff_core::testshape`), so the languages cannot disagree about what a
+weakening is.
+
+Still open:
+
+- **JavaScript/TypeScript integrity analysis.** Node ships no parser, so this
+  needs its own decision rather than following the Go and Java shape; see the
+  support matrix.
+- **Ruby integrity analysis**, which is cheap because `ripper` ships in the same
+  standard library as the minitest that is already recognized.
+- **Targeted invocation** for non-Rust frameworks, so the full suite runs and
+  the receipt says `full_suite`.
+- **Mutation** outside Rust; the operators are defined over Rust syntax.
+
+See `docs/support-matrix.md` for the per-language detail, including what Java,
+.NET, PHP, Ruby and TypeScript would each require.
 
 ## M5 — ecosystem integrations
 
@@ -83,8 +101,11 @@ and mutation, which remain Rust-only.
 - [x] PR annotations/check summary (`--github-annotations`; see ADR-0013)
 - [x] universal agent skill/instruction package (`examples/agent-instruction.txt`)
 - [x] MCP server wrapping core methods (`crates/witdiff-mcp`, ADR-0014)
-- [ ] signed/attested receipts — design complete in ADR-0015; two prerequisites
-  (a content digest and a revision binding) must land first
+- [ ] signed/attested receipts — **deliberately not implemented**. ADR-0015
+  designed it and concluded a signature over the receipt as currently shaped
+  would attest that a run happened, not which code was verified: on a clean tree
+  the workspace fingerprint is exactly SHA-256 of the empty string. Two
+  prerequisites must land first, and key management is an open question.
 
 CI gating treats "nothing to prove" as distinct from "the proof failed", so a
 documentation-only pull request no longer fails the check. The policy lives in

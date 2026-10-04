@@ -2,7 +2,7 @@
 
 This file is the authoritative entry point for coding agents working in this repository. Read it before editing code. Then read `docs/product.md`, `docs/architecture.md`, and `docs/verification-model.md`.
 
-For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis works for Rust, Python, Go and Java; that JavaScript has none because Node ships no parser; and that the line-based fallback matches Rust syntax exclusively.
+For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis works for Rust, Python, Go and Java; that Ruby and JavaScript have classification but no analysis; and that the line-based fallback matches Rust syntax exclusively.
 
 Structural analyzers share one rule engine, `witdiff_core::testshape`. Add a language by supplying a summary and an operator vocabulary, not by copying rules.
 
@@ -79,9 +79,10 @@ Read `docs/roadmap.md`. High-value tasks currently are:
 1. resolving `let` bindings so a rebound subject is not reported as a removal;
 2. removed-error-check detection in the structural analyzer;
 3. the remaining mutation operators (condition negation, numeric return substitution);
-4. structural integrity analysis for Ruby, which follows ADR-0017's shape
-   because the runtime ships a parser; and for JavaScript, which needs its own
-   decision because Node does not;
+4. structural integrity analysis for Ruby — classification and `init` detection
+   are done, and `ripper` ships with the runtime, so it follows ADR-0017's shape;
+   and for JavaScript, which needs its own decision because Node ships no
+   parser;
 5. the signed-receipt prerequisites in ADR-0015: a content digest over the
    verified inputs, then a checkable binding from receipt to revision. Key
    management is an open question and must be settled before implementation;
