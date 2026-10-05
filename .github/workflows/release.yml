@@ -137,13 +137,22 @@ jobs:
       - name: Combine checksums
         run: |
           cd artifacts
-          cat *.sha256 > SHA256SUMS
           # Pair each digest with its file name, which is the format
           # `sha256sum -c` expects.
-          rm -f *.sha256
+          #
+          # The per-platform files are dropped rather than concatenated: their
+          # bare digests carry no file name, so `sha256sum -c` cannot check them.
+          #
+          # `nullglob` matters here. Without it, an unmatched glob expands to the
+          # literal pattern and `shasum` fails on a missing `*.zip` — which is
+          # exactly what happens while only some platforms have built.
+          shopt -s nullglob
           for f in *.tar.gz *.zip; do
             shasum -a 256 "$f" | awk '{print $1"  "$2}'
           done > SHA256SUMS
+          rm -f ./*.sha256
+          test -s SHA256SUMS || { echo "::error::SHA256SUMS is empty"; exit 1; }
+          echo "checksums written for $(wc -l < SHA256SUMS) archive(s)"
           cat SHA256SUMS
 
       - name: Publish
