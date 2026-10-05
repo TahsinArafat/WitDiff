@@ -23,9 +23,17 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    # Bounds how long a job may run. It does not bound queueing, which is why
-    # the publish job below cancels a runner that never starts — see its
-    # "Cancel a runner that never started" step.
+    # Bounds how long a job may *run*. Neither this nor any workflow setting
+    # bounds how long a job may sit **queued**: GitHub's default job timeout is
+    # six hours and applies from start, not from scheduling. So a runner that
+    # never starts is not something a workflow can recover from — it has to be
+    # cancelled from outside, and `gh run cancel` then a re-run does that.
+    #
+    # This was added after three consecutive runs had a leg queued past fifteen
+    # minutes while the others finished in under three. An earlier version of
+    # this comment referred to a cancellation step that no longer exists, which
+    # is how the missing bound went unnoticed.
+    timeout-minutes: 30
     strategy:
       # A single platform failure should not discard the artifacts the others
       # produced; the release step below refuses to publish a partial set.
