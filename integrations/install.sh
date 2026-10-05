@@ -11,7 +11,44 @@
 
 set -eu
 
-SRC=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO="TahsinArafat/WitDiff"
+BRANCH="main"
+
+# When this script is piped into a shell, `$0` is the interpreter (`sh`), not a
+# path, so its directory is `/bin` — and the packages it installs are siblings
+# of the script in the repository. `curl ... | sh` therefore found no packages
+# and reported "0 installed" while exiting 0, which reads as success.
+#
+# The check is whether this script's own directory actually contains the files
+# it is about to copy, not whether `$0` looks like a path: a symlink, a wrapper,
+# or a different working directory would defeat a test on `$0`.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || echo "")
+FETCHED=""
+SRC="$SCRIPT_DIR"
+
+if [ ! -d "$SCRIPT_DIR/opencode" ] || [ ! -d "$SCRIPT_DIR/pi" ]; then
+  echo "The packages are not beside this script (it was piped into a shell)."
+  echo "Downloading them from ${REPO}@${BRANCH}..."
+  echo
+  FETCHED=$(mktemp -d)
+  trap 'rm -rf "$FETCHED"' EXIT INT TERM
+  curl -fsSL --proto '=https' --tlsv1.2 \
+    "https://codeload.github.com/${REPO}/tar.gz/refs/heads/${BRANCH}" \
+    -o "$FETCHED/repo.tar.gz" || {
+      echo "error: could not download the packages; install from a checkout instead:" >&2
+      echo "  git clone https://github.com/${REPO} && cd WitDiff" >&2
+      exit 1
+    }
+  tar xzf "$FETCHED/repo.tar.gz" -C "$FETCHED" || {
+    echo "error: could not unpack the download" >&2
+    exit 1
+  }
+  SRC=$(find "$FETCHED" -maxdepth 1 -type d -name 'WitDiff-*' | head -1)/integrations
+  [ -d "$SRC/pi" ] || {
+    echo "error: the download did not contain integrations/pi" >&2
+    exit 1
+  }
+fi
 GLOBAL=0
 TARGET=""
 UNINSTALL=0
@@ -144,14 +181,26 @@ if command -v pi >/dev/null 2>&1; then
   # An absolute path is used because `pi install --local` records the source
   # relative to the settings file it writes, and a relative path that escapes
   # the project becomes a chain of `../` that breaks if either directory moves.
-  if [ "$GLOBAL" -eq 1 ]; then
-    pi install "$SRC/pi" || echo "  pi install failed; see its message above"
+  # When the packages were downloaded, the local path is a temporary directory
+  # this script deletes on exit. Pi records the source it is given, so a path
+  # into that directory resolves to nothing the moment the trap fires —
+  # observed: `pi install` succeeded and the recorded path was already gone.
+  # A git source is stable and needs no local copy.
+  if [ -n "$FETCHED" ]; then
+    PI_SOURCE="git:github.com/${REPO}@${BRANCH}"
   else
-    (cd "$TARGET" && pi install "$SRC/pi" --local) || echo "  pi install failed; see its message above"
+    PI_SOURCE="$SRC/pi"
   fi
-  echo "  note: pi records this source in settings; re-run after moving WitDiff"
+
+  if [ "$GLOBAL" -eq 1 ]; then
+    pi install "$PI_SOURCE" || echo "  pi install failed; see its message above"
+  else
+    (cd "$TARGET" && pi install "$PI_SOURCE" --local) || echo "  pi install failed; see its message above"
+  fi
+  echo "  note: pi records this source in settings; re-run after moving a local checkout"
 else
-  echo "  pi not found on PATH; install it, then run: pi install $SRC/pi"
+  echo "  pi not found on PATH; install it, then run:"
+  echo "    pi install git:github.com/${REPO}@${BRANCH}"
 fi
 
 echo

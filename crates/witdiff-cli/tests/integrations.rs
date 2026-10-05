@@ -404,10 +404,13 @@ fn removals_are_aimed_at_installed_paths_only() {
         .join("\n");
 
     for line in code.lines().filter(|l| l.contains("rm ")) {
+        // `$FETCHED` and `$work` are temporary directories this script created
+        // and traps to remove; `$1`/`$path` are its own install locations.
         let targeted = line.contains("witdiff")
             || line.contains("$1")
             || line.contains("$path")
-            || line.contains("$work");
+            || line.contains("$work")
+            || line.contains("$FETCHED");
         assert!(
             targeted,
             "{}: this removal is not aimed at an installed path: {line}",
@@ -424,6 +427,142 @@ fn removals_are_aimed_at_installed_paths_only() {
         "{}: the installer must say what it declined to remove",
         path.display()
     );
+}
+
+/// Running the integrations installer through a pipe must actually install.
+///
+/// This was broken: `$0` is the interpreter (`sh`) when a script is piped into a
+/// shell, so the installer looked for its packages beside `/bin`, found none,
+/// copied nothing, and **exited 0** — a success report for an install that did
+/// not happen.
+///
+/// The earlier version of this test searched the script for identifiers, and
+/// passed while the detection condition was replaced with `if false`. It now
+/// runs the script through a pipe and checks the files exist, which is the only
+/// thing that distinguishes a working install from the reported failure.
+#[test]
+fn the_integrations_installer_installs_when_piped() {
+    let dir = integrations();
+    let path = dir.join("install.sh");
+    let script = std::fs::read_to_string(&path).expect("read integrations/install.sh");
+
+    let project = tempfile::TempDir::new().expect("temp dir");
+    // A checkout is present, so the download path is not taken and the test
+    // stays offline; what is exercised is that the packages are found and
+    // copied at all.
+    std::fs::create_dir_all(project.path().join(".git")).expect("git dir");
+
+    // Run the script's text through a shell, the way the documented one-liner
+    // does, so `$0` is the interpreter exactly as in the failure.
+    let mut child = std::process::Command::new("sh")
+        .arg("-s")
+        .current_dir(project.path())
+        .env("WITDIFF_INSTALL_DIR", dir.display().to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run the installer through a pipe");
+    {
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(script.as_bytes())
+            .expect("write the script to the shell");
+    }
+    let output = child.wait_with_output().expect("wait for the installer");
+
+    assert!(
+        output.status.success(),
+        "the piped installer must exit 0; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The three files a project install produces. If the packages were not
+    // found, the script reports "0 installed" and none of these exist.
+    for installed in [
+        ".claude/skills/witdiff/SKILL.md",
+        ".opencode/plugins/witdiff.ts",
+        ".cursor/rules/witdiff.mdc",
+    ] {
+        assert!(
+            project.path().join(installed).is_file(),
+            "piping the installer produced no {installed}; it reported success \
+             without installing, which is the bug this guards"
+        );
+    }
+}
+
+/// The platform-detection branch and the archive mapping must agree.
+///
+/// `detect_target` decides which triple this machine is; the mapping below it
+/// decides which archive that triple names. A target present in one but not the
+/// other produces an installer that identifies the platform and then refuses it.
+#[test]
+fn every_detected_target_has_an_archive() {
+    let dir = integrations();
+    let root = dir.parent().expect("repository root");
+    let text = std::fs::read_to_string(root.join("install.sh")).expect("read install.sh");
+
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+    ] {
+        // The triple must be produced by platform detection *and* accepted by
+        // the archive mapping. The two regions are located by slicing between
+        // the `case` that starts them and the next line that closes it, because
+        // the blocks are indented to different depths and a search for `esac`
+        // at column zero ran past the end of the first one entirely — which made
+        // this test pass while the Windows branch was deleted.
+        // Sliced between the `case` under the marker and the `esac` that closes
+        // it. Nesting is counted, because these blocks contain inner `case`
+        // statements: stopping at the first `esac` truncated the detection block
+        // at the Linux branch, so the test reported that macOS was undetected in
+        // a script that detects it.
+        let region = |marker: &str| -> String {
+            let start = text
+                .find(marker)
+                .unwrap_or_else(|| panic!("install.sh has no `{marker}`"));
+            let rest = &text[start..];
+            let mut depth = 0i32;
+            let mut opened = false;
+            let mut offset = 0;
+            for line in rest.split_inclusive('\n') {
+                let word = line.trim();
+                if word.ends_with("in") && word.starts_with("case ") || word == "case" {
+                    depth += 1;
+                    opened = true;
+                } else if word == "esac" {
+                    depth -= 1;
+                    if opened && depth == 0 {
+                        return rest[..offset + line.len()].to_owned();
+                    }
+                }
+                offset += line.len();
+            }
+            panic!("the `{marker}` block is never closed");
+        };
+
+        let detection = region("detect_target()");
+        let mapping = region("case \"$target\" in");
+
+        assert_ne!(
+            detection, mapping,
+            "the two regions must be found separately, or one test covers both"
+        );
+        assert!(
+            detection.contains(target),
+            "install.sh does not detect {target}; a platform the release publishes \
+             for would be refused with \"no prebuilt binary\""
+        );
+        assert!(
+            mapping.contains(target),
+            "install.sh maps no archive for {target}"
+        );
+    }
 }
 
 /// The same skill body is copied to several places because each harness reads

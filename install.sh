@@ -69,6 +69,17 @@ detect_target() {
         *) return 1 ;;  # Intel macOS is not built; see docs/development.md
       esac
       ;;
+    # Git Bash, MSYS2 and Cygwin report these, and they are the only way this
+    # script runs on Windows: it is a POSIX shell script, so native PowerShell
+    # and cmd users use the zip and the README's PowerShell block instead.
+    # Without this branch the installer identified Windows and then refused it,
+    # despite the release publishing a Windows archive.
+    MINGW*|MSYS*|CYGWIN*)
+      case "$arch" in
+        x86_64|amd64) echo "x86_64-pc-windows-msvc" ;;
+        *) return 1 ;;
+      esac
+      ;;
     *) return 1 ;;
   esac
 }
