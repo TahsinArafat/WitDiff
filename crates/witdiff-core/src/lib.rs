@@ -20,6 +20,7 @@ pub mod pyanalysis;
 pub mod pyscript;
 pub mod rubyanalysis;
 pub mod rubyscript;
+pub mod run;
 pub mod runner;
 pub mod rustanalysis;
 pub mod selection;

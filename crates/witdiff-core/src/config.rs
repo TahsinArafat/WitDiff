@@ -50,6 +50,19 @@ pub struct VerificationConfig {
     /// never satisfy a proof. A hung suite is a fact about the candidate, not a
     /// WitDiff malfunction, so it is reported rather than allowed to block.
     pub timeout_secs: Option<u64>,
+    /// How many times to run a command that **fails**, to tell a real failure
+    /// from a flaky one.
+    ///
+    /// One means a single sample, which is the previous behaviour and the
+    /// default. Above one, a failing run is repeated until it passes or the
+    /// bound is reached, and disagreement is reported as an unstable suite
+    /// rather than as evidence in either direction.
+    ///
+    /// Only failures are repeated. A passing run has nothing to distinguish,
+    /// and repeating it would double the cost of the common case to learn that
+    /// it still passes.
+    #[serde(default = "one")]
+    pub flake_repeats: usize,
     /// Run the test command inside a container instead of on the host.
     ///
     /// When set to an image name, the command is rewritten to
@@ -142,6 +155,10 @@ fn default_true() -> bool {
     true
 }
 
+fn one() -> usize {
+    1
+}
+
 impl VerificationConfig {
     /// Resolve the configured framework name.
     ///
@@ -195,6 +212,7 @@ impl Default for VerificationConfig {
             // smaller claim, so it stays opt-in for v1. Enable it per
             // repository once the full-suite path is understood.
             targeted_test_selection: false,
+            flake_repeats: 1,
             sandbox_image: None,
             sandbox_env: Vec::new(),
             sandbox_network: true,

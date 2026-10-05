@@ -14,7 +14,7 @@ use crate::{
         RefusedInlineTests, RunResult, Severity, SplicedInlineTests, TestSelection,
         VerificationStatus,
     },
-    runner::{run, CommandSpec, Sandbox},
+    runner::{CommandSpec, Sandbox},
     rustanalysis::analyze_rust_test_change,
     selection::{build_targeted_command, SelectionOutcome},
 };
@@ -116,14 +116,29 @@ pub fn verify_repository(
     // still carries every integrity finding, which was computed before this
     // point and does not depend on the command (ADR-0019).
     let mut missing_program: Option<String> = None;
-    let head_run = match run(
+    // A failing run is repeated, so a flaky workspace cannot be reported as a
+    // broken one. A passing run is not: it has nothing to distinguish.
+    let repeats = config.verification.flake_repeats.max(1);
+    let mut unstable: Vec<String> = Vec::new();
+    let head_outcome = crate::run::run_repeating(
         &command,
         repo.root(),
         config.verification.max_output_bytes,
         timeout,
         framework,
         sandbox.as_ref(),
-    ) {
+        repeats,
+    );
+    if let Ok(outcome) = &head_outcome {
+        if !outcome.stability.is_evidence() {
+            unstable.push(format!(
+                "the workspace run is flaky: {} of {} runs passed, so it is not \
+                 evidence that the workspace is green",
+                outcome.observed_successes, outcome.repeats
+            ));
+        }
+    }
+    let head_run = match head_outcome.map(|outcome| outcome.result) {
         Ok(result) => result,
         Err(error) => {
             let program = command.as_vec().first().cloned().unwrap_or_default();
@@ -181,14 +196,25 @@ pub fn verify_repository(
 
         // Control experiment: the untouched base must pass before we can attribute
         // a later failure to the transplanted regression tests.
-        let control_result = run(
+        let control_outcome = crate::run::run_repeating(
             &command,
             &worktree,
             config.verification.max_output_bytes,
             timeout,
             framework,
             sandbox.as_ref(),
+            repeats,
         );
+        if let Ok(outcome) = &control_outcome {
+            if !outcome.stability.is_evidence() {
+                unstable.push(format!(
+                    "the base control run is flaky: {} of {} runs passed, so no \
+                     failure can be attributed to the changed tests",
+                    outcome.observed_successes, outcome.repeats
+                ));
+            }
+        }
+        let control_result = control_outcome.map(|outcome| outcome.result);
         let experiment_result = match control_result {
             Ok(control) if control.success => {
                 base_control_run = Some(control);
@@ -243,15 +269,24 @@ pub fn verify_repository(
                         &mut refused,
                     )?;
 
+                    let experiment = crate::run::run_repeating(
+                        &command,
+                        &worktree,
+                        config.verification.max_output_bytes,
+                        timeout,
+                        framework,
+                        sandbox.as_ref(),
+                        repeats,
+                    )?;
+                    if !experiment.stability.is_evidence() {
+                        unstable.push(format!(
+                            "the base experiment is flaky: {} of {} runs passed, so \
+                             the failure is not evidence of a behavioural regression",
+                            experiment.observed_successes, experiment.repeats
+                        ));
+                    }
                     Ok(Some(BaseExperiment {
-                        result: run(
-                            &command,
-                            &worktree,
-                            config.verification.max_output_bytes,
-                            timeout,
-                            framework,
-                            sandbox.as_ref(),
-                        )?,
+                        result: experiment.result,
                         blocked_tests,
                         spliced,
                         refused,
@@ -303,11 +338,25 @@ pub fn verify_repository(
                 }
                 let candidate_status = match result.failure_kind {
                     Some(FailureKind::TestFailure) if !result.success => {
-                        red_green_proven = true;
+                        // The proof is only a proof if the suite is not flaky.
+                        // `red_green_proven` was set here before any stability
+                        // check, which claimed a proof from an unstable run —
+                        // and an unstable run's failure is exactly the one that
+                        // could have been a flake.
+                        let flaky = !unstable.is_empty();
+                        red_green_proven = !flaky;
                         let has_high = integrity_findings
                             .iter()
                             .any(|f| f.severity == Severity::High);
-                        if config.verification.block_on_integrity_findings && has_high {
+                        if flaky {
+                            notes.push(
+                                "red/green behavior was observed, but a run in the \
+                                 experiment did not give the same answer twice, so the \
+                                 result is not evidence"
+                                    .into(),
+                            );
+                            VerificationStatus::NotVerified
+                        } else if config.verification.block_on_integrity_findings && has_high {
                             notes.push("red/green behavior was observed, but high-severity test-integrity findings block verification".into());
                             VerificationStatus::NotVerified
                         } else if !blocked_tests.is_empty() {
@@ -579,6 +628,20 @@ pub fn verify_repository(
         if !evidence_fresh && status.is_verified() {
             status = VerificationStatus::NotVerified;
         }
+    }
+
+    // An unstable suite is reported whatever the status came out as. A flaky
+    // workspace run or control run does not reach the proof branch above, so
+    // without this the only trace would be a status with no explanation.
+    if !unstable.is_empty() && !status.is_verified() {
+        for reason in &unstable {
+            notes.push(format!("flake: {reason}"));
+        }
+        notes.push(
+            "re-run to see whether the result is reproducible, or raise \
+             `verification.flake_repeats` to confirm failures automatically"
+                .into(),
+        );
     }
 
     Ok(Receipt {

@@ -328,6 +328,10 @@ fn finish(
         stderr,
         failure_kind,
         timed_out,
+        // `run` takes one sample. `crate::run::run_repeating` is what sets
+        // these to something else, so a direct caller gets the honest default.
+        stability: crate::run::Stability::SingleRun,
+        repeats: 1,
     })
 }
 

@@ -115,6 +115,23 @@ pub struct RunResult {
     /// explicitly so a consumer never has to infer it from a null exit code.
     #[serde(default)]
     pub timed_out: bool,
+    /// Whether this command's outcome was confirmed by repeating it.
+    ///
+    /// Additive in v1: a receipt written before this field existed deserializes
+    /// as `single_run`, which is exactly how those runs were performed.
+    #[serde(default = "single_run")]
+    pub stability: crate::run::Stability,
+    /// How many times the command actually ran.
+    #[serde(default = "one_run")]
+    pub repeats: usize,
+}
+
+fn single_run() -> crate::run::Stability {
+    crate::run::Stability::SingleRun
+}
+
+fn one_run() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -378,6 +395,9 @@ impl RunResult {
             stderr: error.to_owned(),
             failure_kind: Some(FailureKind::SpawnFailure),
             timed_out: false,
+            // Nothing was run, so there is no repeat to compare.
+            stability: crate::run::Stability::SingleRun,
+            repeats: 0,
         }
     }
 

@@ -385,6 +385,8 @@ mod tests {
             stderr: String::new(),
             failure_kind: failure,
             timed_out,
+            stability: crate::run::Stability::SingleRun,
+            repeats: 1,
         }
     }
 
