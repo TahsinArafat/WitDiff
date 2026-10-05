@@ -88,10 +88,10 @@ language using it.
 
 `verify_languages_end_to_end.rs` additionally drives the whole red/green chain
 against real temporary repositories for **all five**: pytest, Go, Ruby/RSpec,
-JavaScript/TypeScript and Java. Java reaches `VerifiedWithWarnings` rather than
-`Verified` because a script-shaped test command yields no Java toolchain, so
-structural analysis is unavailable — which the receipt reports. See
-`docs/support-matrix.md`.
+JavaScript/TypeScript and Java, each reaching `Verified`. The Java toolchain is
+derived from the changed `.java` files as well as from the configured command,
+so a project running a committed wrapper script no longer loses structural
+analysis. See `docs/support-matrix.md`.
 
 Still open:
 

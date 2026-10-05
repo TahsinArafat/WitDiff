@@ -345,9 +345,11 @@ against the real tool, and each found real bugs.
 
 ### What remains
 
-**Red/green proof is end to end for all five supported languages.** Each reaches
-a proof against a real temporary repository with a real toolchain, and each
-reaches `Verified`.
+**Red/green proof is end to end for every supported language.** Rust is proven
+in `verify_end_to_end.rs`; the other five — pytest, Go, Ruby/RSpec,
+JavaScript/TypeScript and Java — are proven in
+`verify_languages_end_to_end.rs`. Each runs against a real toolchain in a real
+temporary repository and each reaches `Verified`.
 
 Python additionally has negative tests: a test that passes on the base is
 reported `not_verified`, and a gutted assertion is caught rather than accepted.

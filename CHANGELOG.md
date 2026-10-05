@@ -2,32 +2,6 @@
 
 ## Unreleased
 
-### Fixed
-
-- **Java reached `VerifiedWithWarnings` and could never reach `Verified`.**
-  The toolchain was derived only from the configured test command, so a project
-  whose tests run through a committed wrapper script named no JDK at all: the
-  red/green proof held, structural analysis was skipped, and the receipt only
-  said analysis was unavailable. A test file ending in `.java` is now evidence
-  of a Java project too.
-
-  Both halves are tested, because they are different claims: a script-shaped
-  command now yields `Verified`, and gutting an existing assertion while adding
-  a credible regression test produces a `trivial_assertion` finding from the
-  structural comparison rather than merely stopping the skip notice.
-
-- **A run whose only movement was build output lost its proof.** Freshness was
-  `before == after` on the raw fingerprint while `is_build_output` only formatted
-  a message, so the receipt would call those paths irrelevant to the
-  verification and fail the gate for them in the same sentence. The downgrade
-  also ran unconditionally, so even a classification that said "only a build"
-  was erased afterwards. CI caught this: the `pytest` proof failed on
-  `__pycache__` written by Python 3.12 and passed on 3.9 locally.
-
-- **`cargo-llvm-cov` is installed in CI.** Without it the coverage tests skip,
-  which is the same trap the ignored suite was in before toolchains were wired
-  in — a green run that exercised nothing.
-
 ### Added
 
 - **End-to-end red/green proof for pytest, Go, Ruby/RSpec and JavaScript.**
@@ -42,17 +16,91 @@
   the negative direction: a test that passes on the base is reported
   `not_verified`, and a gutted assertion is caught rather than accepted.
 
-  **Java is included**, driven by a real JUnit 5 platform. It reaches
-  `VerifiedWithWarnings` rather than `Verified`: a script-shaped test command
-  gives the Java analyzer no toolchain to derive, so structural analysis is
-  unavailable and the receipt reports that. Fewer findings, never wrong ones.
+  **Java is included**, driven by a real JUnit 5 platform, and reaches
+  `Verified` like the rest. The toolchain is derived from the changed `.java`
+  files as well as from the configured command, so a project running a committed
+  wrapper script — which names no JDK — no longer loses structural analysis.
 
   Assembling that JUnit classpath found a failure mode worth recording:
   **mixing platform versions is silent**. A `1.14.4` platform with a `6.0.1`
   Jupiter engine compiles the tests, runs them, prints `0 tests found`, and
   exits 0 — a green run that executed nothing.
 
+- **Coverage of the changed production lines** (`verification.coverage`), as
+  supplementary evidence: it reports how many of the lines a change added the
+  tests actually executed, with per-file detail. Counts added lines from a
+  `-U0` patch rather than whole files, so a one-line edit to a 3000-line file
+  is measured as one line. Never affects `status` or `red_green_proven` —
+  a run with coverage enabled and one without are asserted to reach the same
+  verdict, for the same reason mutation does not (ADR-0011).
+
+  Needs `cargo-llvm-cov`, and reports "not measured" rather than approximating
+  for any other framework. It re-runs the suite with instrumentation, so it is
+  a second full test run and off by default.
+
+- **Environment evidence** on the receipt: the configured test program, its
+  version, the toolchain that participates in it, and a digest of each
+  dependency manifest. Kept out of the verification digest so upgrading Python
+  cannot make an older receipt report itself stale.
+
+- **A committed gate policy** (`[gate]` in `witdiff.toml`), which decides which
+  results pass. Command-line flags may only tighten it, so a repository's own
+  floor cannot be undone by leaving `--strict` off. Deliberately not an
+  allow-list of statuses, which would let a repository configure itself out of
+  the tool.
+
+- **A provenance chain** (`.witdiff/provenance.json`) linking each receipt's
+  digest to the one before it, so a sequence of verifications can be checked as
+  a sequence. Editing, dropping or reordering an entry breaks the links that
+  follow, and both `verify` and `receipt` report it.
+
+- **Sandboxed execution** (`verification.sandbox_image`), which rewrites every
+  run — head, control, experiment and mutants — into a named container, since
+  `test_command` comes from the changeset under review. The container is named
+  so a timeout can remove it rather than leaving candidate code running; the
+  environment is an allow-list; `--network none` is available.
+
+- **MCP server** (`crates/witdiff-mcp`, ADR-0014) exposing `witdiff_inspect`,
+  `witdiff_verify` and `witdiff_receipt` over newline-delimited JSON-RPC 2.0 on
+  stdio. It calls `witdiff-core` directly, returns the receipt unchanged, and
+  takes its gate verdict from the same `VerificationStatus::gate` the CLI and CI
+  use, so the three cannot disagree. Zero new dependencies: the protocol subset
+  is implemented over `serde_json` because the official SDK requires rustc 1.88
+  against this workspace's 1.78 and pulls 68 packages.
+
 ### Fixed
+
+- **Java reached `VerifiedWithWarnings` and could never reach `Verified`.**
+  The toolchain was derived only from the configured test command, so a project
+  whose tests run through a committed wrapper script named no JDK at all: the
+  red/green proof held, structural analysis was skipped, and the receipt only
+  said analysis was unavailable. A test file ending in `.java` is now evidence
+  of a Java project too.
+
+  Both halves are tested, because they are different claims: a script-shaped
+  command now yields `Verified`, and gutting an existing assertion while adding
+  a credible regression test produces a `trivial_assertion` finding from the
+  structural comparison rather than merely stopping the skip notice.
+
+- **A rebound subject was reported as a removed assertion.** `assert_eq!(compute(), 4)`
+  rewritten to `let v = compute(); assert_eq!(v, 4)` asserts the same thing, but
+  the analyzer cannot see through the binding and reported a removal. Simple
+  bindings are now resolved — a single name bound to a single expression — while
+  reassignment, destructuring and cross-test names deliberately stay unresolved
+  and are still reported rather than assumed equal. Shipped after 1.0.0, which
+  recorded the limitation in its own Known-limitations list.
+
+- **A run whose only movement was build output lost its proof.** Freshness was
+  `before == after` on the raw fingerprint while `is_build_output` only formatted
+  a message, so the receipt would call those paths irrelevant to the
+  verification and fail the gate for them in the same sentence. The downgrade
+  also ran unconditionally, so even a classification that said "only a build"
+  was erased afterwards. CI caught this: the `pytest` proof failed on
+  `__pycache__` written by Python 3.12 and passed on 3.9 locally.
+
+- **`cargo-llvm-cov` is installed in CI.** Without it the coverage tests skip,
+  which is the same trap the ignored suite was in before toolchains were wired
+  in — a green run that exercised nothing.
 
 - **JavaScript integrity analysis reported no expectation changes, at all.**
   The analyzer normalized Babel's `NumericLiteral`/`StringLiteral` but not
@@ -112,55 +160,6 @@
   checks compile failure before test failure, the reverse of every other
   framework, because a load error is never behavioural evidence.
 
-### Changed
-
-- **CI runs the tests that prove the analyzers work.** The 100+ `#[ignore]`d
-  tests — the ones exercising real parsers and real runners — were skipped by
-  `cargo test`, so none of it was exercised on any pull request. CI now installs
-  Node, Python, Go, Ruby and a JDK, adds `acorn`/`typescript` via `npm ci`,
-  installs RSpec and pytest, and runs the `--ignored` suite. The Java
-  end-to-end proof additionally downloads a JUnit 5 platform, because mixing
-  JUnit versions silently reports `0 tests found` and exits 0 — a green run that
-  executed nothing.
-
-### Added
-
-- **Coverage of the changed production lines** (`verification.coverage`), as
-  supplementary evidence: it reports how many of the lines a change added the
-  tests actually executed, with per-file detail. Counts added lines from a
-  `-U0` patch rather than whole files, so a one-line edit to a 3000-line file
-  is measured as one line. Never affects `status` or `red_green_proven` —
-  a run with coverage enabled and one without are asserted to reach the same
-  verdict, for the same reason mutation does not (ADR-0011).
-
-  Needs `cargo-llvm-cov`, and reports "not measured" rather than approximating
-  for any other framework. It re-runs the suite with instrumentation, so it is
-  a second full test run and off by default.
-
-- **Environment evidence** on the receipt: the configured test program, its
-  version, the toolchain that participates in it, and a digest of each
-  dependency manifest. Kept out of the verification digest so upgrading Python
-  cannot make an older receipt report itself stale.
-
-- **A committed gate policy** (`[gate]` in `witdiff.toml`), which decides which
-  results pass. Command-line flags may only tighten it, so a repository's own
-  floor cannot be undone by leaving `--strict` off. Deliberately not an
-  allow-list of statuses, which would let a repository configure itself out of
-  the tool.
-
-- **A provenance chain** (`.witdiff/provenance.json`) linking each receipt's
-  digest to the one before it, so a sequence of verifications can be checked as
-  a sequence. Editing, dropping or reordering an entry breaks the links that
-  follow, and both `verify` and `receipt` report it.
-
-- **Sandboxed execution** (`verification.sandbox_image`), which rewrites every
-  run — head, control, experiment and mutants — into a named container, since
-  `test_command` comes from the changeset under review. The container is named
-  so a timeout can remove it rather than leaving candidate code running; the
-  environment is an allow-list; `--network none` is available.
-
-### Fixed
-
 - **The reusable workflow never captured WitDiff's exit code.** The verify step
   was `witdiff verify ... | tee out; echo "exit_code=$?"`, but GitHub runs an
   unspecified shell as `bash -e`, so a non-zero verify aborted the step before
@@ -172,50 +171,6 @@
   then fixed by capturing the code immediately with `set +e` around the run.
   The enforce step now also reports an empty verdict as a tool error rather than
   letting it pass.
-
-### Changed
-
-- **Signing and verification are pure Rust** (`ed25519-dalek`, ADR-0022). They
-  previously shelled out to Node's built-in `crypto`, which ADR-0022 recorded
-  as an environment workaround: the cargo cache could not be written, so the
-  crate could not be fetched or exercised. With that restriction lifted the
-  crate was added and exercised directly. No JavaScript runtime is now needed to
-  sign or verify a receipt.
-
-  The two properties that define what a signature *means* are preserved and
-  asserted against the real implementation: the domain separator
-  `witdiff.receipt-signature.v1\0`, and the status inside the signed bytes. The
-  latter is not cosmetic — signing the digest alone let a receipt forged from
-  `not_verified` to `verified` still verify as VALID.
-
-  Keys are raw 32-byte files: a seed to sign, a public key to verify.
-  Verification deliberately does not accept a private seed, so a verifier never
-  needs private key material.
-
-### Documentation
-
-- **ADR-0015 designs signed receipts and declines to implement them yet.** The
-  design work found that a signature over the receipt as currently shaped would
-  attest that a run happened, not which code was verified. On a clean tree the
-  workspace fingerprint is exactly SHA-256 of the empty string, so two
-  repositories containing entirely different source produce the same
-  fingerprint; it is a staleness check, not a content hash. A content digest
-  over the verified inputs and a checkable revision binding are prerequisites.
-  Findings recorded: a receipt is trivially forgeable, the fingerprint does not
-  identify the verified code, and nothing detects a receipt that has gone stale
-  against the working tree.
-
-### Added
-
-- **MCP server** (`crates/witdiff-mcp`, ADR-0014) exposing `witdiff_inspect`,
-  `witdiff_verify` and `witdiff_receipt` over newline-delimited JSON-RPC 2.0 on
-  stdio. It calls `witdiff-core` directly, returns the receipt unchanged, and
-  takes its gate verdict from the same `VerificationStatus::gate` the CLI and CI
-  use, so the three cannot disagree. Zero new dependencies: the protocol subset
-  is implemented over `serde_json` because the official SDK requires rustc 1.88
-  against this workspace's 1.78 and pulls 68 packages.
-
-### Fixed
 
 - **`witdiff verify --json` emitted a stray commit hash, making its output
   unparseable.** `git_status` used `.status()`, which inherits the parent's
@@ -237,23 +192,6 @@
   per pull request.
 - An expanded drop-in agent instruction package (`examples/agent-instruction.txt`)
   covering the three-way exit code, every status, and the reporting rules.
-
-### Changed
-
-- **`--strict` no longer fails when there is nothing to prove.** `no_changed_tests`
-  now passes by default and is reported as `nothing_to_prove` rather than as a
-  gate failure, because failing a documentation-only pull request on a correct
-  receipt teaches operators to disable the check (ADR-0013). The gate policy
-  lives in the core (`VerificationStatus::gate`) so CI, MCP and local scripts
-  reach the same verdict, and `--fail-on-no-changed-tests` restores the previous
-  behavior explicitly.
-
-- **Framework-specific failure classification** (ADR-0012), selected with
-  `verification.framework` and defaulting to `cargo`. Cargo, pytest, Jest/Vitest
-  and Go output are now recognized. An unrecognized framework name is an
-  explicit error rather than a silent fallback to the Rust classifier.
-
-### Fixed
 
 - **Non-Rust test failures were misclassified, so no proof was possible.**
   `classify_failure` matched cargo output only. Measured against real framework
@@ -300,8 +238,6 @@
   (high severity). A `match` replaced by an `if`/`else` chain is a
   documented non-finding: its assertions are still compared.
 
-### Fixed
-
 - **Inline test detection missed the common cases.** The detector looked for
   marker substrings (`#[test]`, `assert!(`, …) on changed lines, so a changed
   assertion body such as `is_even(3)` becoming `is_even(4)` was not recognized
@@ -317,6 +253,60 @@
   `assert_eq!(cost(), 10)` was therefore reported as if the `10` had been
   rewritten to `20`. Pairing now consumes identical assertions first, then
   pairs the remainder by subject.
+
+### Changed
+
+- **CI runs the tests that prove the analyzers work.** The 100+ `#[ignore]`d
+  tests — the ones exercising real parsers and real runners — were skipped by
+  `cargo test`, so none of it was exercised on any pull request. CI now installs
+  Node, Python, Go, Ruby and a JDK, adds `acorn`/`typescript` via `npm ci`,
+  installs RSpec and pytest, and runs the `--ignored` suite. The Java
+  end-to-end proof additionally downloads a JUnit 5 platform, because mixing
+  JUnit versions silently reports `0 tests found` and exits 0 — a green run that
+  executed nothing.
+
+- **Signing and verification are pure Rust** (`ed25519-dalek`, ADR-0022). They
+  previously shelled out to Node's built-in `crypto`, which ADR-0022 recorded
+  as an environment workaround: the cargo cache could not be written, so the
+  crate could not be fetched or exercised. With that restriction lifted the
+  crate was added and exercised directly. No JavaScript runtime is now needed to
+  sign or verify a receipt.
+
+  The two properties that define what a signature *means* are preserved and
+  asserted against the real implementation: the domain separator
+  `witdiff.receipt-signature.v1\0`, and the status inside the signed bytes. The
+  latter is not cosmetic — signing the digest alone let a receipt forged from
+  `not_verified` to `verified` still verify as VALID.
+
+  Keys are raw 32-byte files: a seed to sign, a public key to verify.
+  Verification deliberately does not accept a private seed, so a verifier never
+  needs private key material.
+
+- **`--strict` no longer fails when there is nothing to prove.** `no_changed_tests`
+  now passes by default and is reported as `nothing_to_prove` rather than as a
+  gate failure, because failing a documentation-only pull request on a correct
+  receipt teaches operators to disable the check (ADR-0013). The gate policy
+  lives in the core (`VerificationStatus::gate`) so CI, MCP and local scripts
+  reach the same verdict, and `--fail-on-no-changed-tests` restores the previous
+  behavior explicitly.
+
+- **Framework-specific failure classification** (ADR-0012), selected with
+  `verification.framework` and defaulting to `cargo`. Cargo, pytest, Jest/Vitest
+  and Go output are now recognized. An unrecognized framework name is an
+  explicit error rather than a silent fallback to the Rust classifier.
+
+### Documentation
+
+- **ADR-0015 designs signed receipts and declines to implement them yet.** The
+  design work found that a signature over the receipt as currently shaped would
+  attest that a run happened, not which code was verified. On a clean tree the
+  workspace fingerprint is exactly SHA-256 of the empty string, so two
+  repositories containing entirely different source produce the same
+  fingerprint; it is a staleness check, not a content hash. A content digest
+  over the verified inputs and a checkable revision binding are prerequisites.
+  Findings recorded: a receipt is trivially forgeable, the fingerprint does not
+  identify the verified code, and nothing detects a receipt that has gone stale
+  against the working tree.
 
 ## 1.0.0
 

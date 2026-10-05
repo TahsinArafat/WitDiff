@@ -27,7 +27,9 @@ witdiff init
 
 `init` detects the project type from its manifest and writes a matching
 configuration: `cargo test` for Rust, `python3 -m pytest` for Python, `go test
-./...` for Go, `npm test` for JavaScript. Edit `witdiff.toml` if the command or
+./...` for Go, `npm test` for JavaScript, `mvn test` or `gradle test` for Java,
+and `bundle exec rspec` when an `.rspec` file or a `spec/` directory is present
+(`rake test` for Minitest otherwise). Edit `witdiff.toml` if the command or
 the dedicated test globs differ.
 
 Then check the setup before running anything:

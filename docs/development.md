@@ -39,6 +39,21 @@ them explicitly:
 cargo test --workspace --all-features -- --ignored --test-threads=1
 ```
 
+Most of those tests spawn a real toolchain, and a missing one is **skipped
+rather than failed** — which makes a green run indistinguishable from a run that
+tested nothing. Install what CI installs, or expect coverage:
+
+```bash
+npm install                      # acorn + typescript, for the JavaScript analyzer
+gem install rspec                # the Ruby end-to-end proof runs a live RSpec
+python3 -m pip install pytest    # the Python proof
+rustup component add llvm-tools-preview && cargo install cargo-llvm-cov   # coverage
+```
+
+Java additionally needs a JUnit 5 platform; the Java test discovers it from
+`WITDIFF_JUNIT_JARS` or from an IDE extension directory, and **fails loudly**
+when the variable is set but no runtime is found rather than skipping.
+
 Two constraints apply when adding fixtures:
 
 1. **The fixture must be fingerprint-stable.** `workspace_fingerprint` hashes

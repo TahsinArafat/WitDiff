@@ -34,7 +34,8 @@ WitDiff is not:
 - a generic LLM agent framework;
 - a replacement for code review;
 - a security scanner;
-- a coverage percentage tool;
+- a coverage percentage tool **as a claim of proof** — coverage of the changed
+  lines is recorded as supplementary evidence and never changes the verdict;
 - an AI “confidence score.”
 
 ## Product principles

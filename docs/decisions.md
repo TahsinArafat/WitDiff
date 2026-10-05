@@ -19,8 +19,6 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0014: the MCP server is a hand-written stdio adapter, not an SDK client
 - ADR-0015: a signed receipt can attest a run, not a revision. Both
   prerequisites (a content digest and a revision binding) are implemented
-- ADR-0022: signatures are Ed25519 for tamper-evidence, over the digest, with an
-  operator-supplied key that WitDiff never stores
 - ADR-0016: Python integrity analysis uses the interpreter's own AST
 - ADR-0017: Go integrity analysis uses `go/ast`, behind a shared rule engine
 - ADR-0018: Java integrity analysis uses the JDK's parser, swapping JUnit's
@@ -29,3 +27,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
   project's own pin
 - ADR-0020: Ruby integrity analysis uses `ripper` from the standard library
 - ADR-0021: JavaScript integrity analysis uses the parser the project installs
+- ADR-0022: signatures are Ed25519 tamper-evidence over the status and the
+  digest, with an operator-supplied key that WitDiff never stores

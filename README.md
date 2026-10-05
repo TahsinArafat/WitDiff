@@ -44,34 +44,32 @@ This starter implements a functional **Rust-first v0.1**. It is deliberately ven
 
 Implemented:
 
-- Git repository discovery
-- automatic base selection (`origin/main`, `main`, `origin/master`, `master`, `HEAD~1`)
-- changed-file classification
-- configurable dedicated-test glob detection
-- tracked and untracked changed-test support
-- temporary detached Git worktree for the base revision
-- test-only patch transplantation
-- HEAD test execution
-- BASE test execution
-- optional targeted cargo test selection that records exactly what ran
-- cargo failure classification (test failure vs compile failure)
-- red/green proof status
-- syntax-aware Rust test-integrity rules (removed/changed/weakened assertions, removed tests, unparsable files)
-- line-oriented integrity rules for non-Rust test files
+- Git repository discovery and automatic base selection (`origin/main`, `main`, `origin/master`, `master`, `HEAD~1`)
+- changed-file classification and configurable dedicated-test globs
+- tracked and untracked changed-test support across a detached base worktree
+- test-only patch transplantation, with the ineligible files named rather than smuggled
+- HEAD, pristine-base control and base-plus-tests runs, with a bounded timeout per run
+- framework-specific failure classification: cargo, pytest, Jest/Vitest, Go, Java and Ruby
+- red/green proof status, and a receipt that says *why* when no proof was possible
+- structural test-integrity analysis for **Rust, Python, Go, Java, Ruby and JavaScript/TypeScript**, sharing one rule engine so no language can disagree about what a weakening is
 - NUL-delimited Git path handling so non-ASCII paths are classified correctly
-- a test-only transplant boundary (no production diff enters a test transplant)
-- workspace evidence fingerprinting
-- JSON receipt persistence
-- human and JSON CLI output
+- workspace evidence fingerprinting, with build output distinguished from a real source change
+- a content digest and revision binding for receipts, plus optional Ed25519 signatures
+- environment evidence: the toolchain and dependency manifests the run used
+- coverage of the changed production lines the tests exercised (Rust, opt-in)
+- a sandboxed runner that executes the candidate's test command in a container (opt-in)
+- an append-only provenance chain across verifications
+- a committed gate policy (`[gate]`) deciding which results pass
+- JSON receipt persistence, plus human and JSON CLI output
 - `init`, `doctor`, `inspect`, `verify`, and `receipt` commands
 - an MCP server (`witdiff-mcp`) exposing `inspect`, `verify` and `receipt` to agents
-- a reusable GitHub Actions workflow and `--github-annotations` for PR checks
+- a reusable GitHub Actions workflow, `--github-annotations` for PR checks, and CI that runs every one of these tests against real toolchains
 
 Rust inline `#[cfg(test)] mod tests` blocks are transplanted by span splicing: only the test module's bytes move, so production changes elsewhere in the same file stay at the base revision. A file is refused, and the reason recorded, when it cannot be spliced safely (`unparsable`, `no_counterpart_in_base`, `test_outside_test_module`). See ADR-0010.
 
 Targeted test selection is cargo-only and opt-in (`verification.targeted_test_selection`, default `false`). When the configured command cannot be narrowed without changing what runs, WitDiff runs the full suite and records why. See [`docs/verification-model.md`](docs/verification-model.md).
 
-Failure classification is framework-specific: cargo, pytest, Jest/Vitest and Go are recognized, selected with `verification.framework` (default `cargo`). Before this, a genuine pytest, Jest or Go test failure classified as an unrecognized command failure, which yields `not_verified` instead of a proof. See ADR-0012.
+Failure classification is framework-specific: cargo, pytest, Jest/Vitest, Go, Java and Ruby (Minitest and RSpec) are recognized, selected with `verification.framework` (default `cargo`). Before this, a genuine pytest, Jest or Go test failure classified as an unrecognized command failure, which yields `not_verified` instead of a proof. See ADR-0012.
 
 Changed-code mutation is opt-in (`verification.mutation`, default `false`) and **supplementary**: it never changes `status`. Each mutant is classified `killed`, `survived`, `not_compiled`, `timeout` or `skipped`, and only the first two are decisions about test strength — a mutant that failed to build was never executed and is not counted as a kill. See ADR-0011.
 
@@ -116,7 +114,7 @@ By default the receipt is written to:
 
 ```text
 WitDiff verification
-  status           : Verified
+  status           : verified
   base             : origin/main
   head             : 55cc9b...
   changed tests    : 1
@@ -130,14 +128,14 @@ WitDiff verification
 If the changed test passes on both revisions:
 
 ```text
-status: NotVerified
+status: not_verified
 note: changed tests also pass on the base revision; they do not prove the behavioral change
 ```
 
 If the test fails to compile against base:
 
 ```text
-status: BaseIncompatible
+status: base_incompatible
 ```
 
 WitDiff v0.1 intentionally does **not** count compilation failure as proof of a regression because it does not demonstrate the intended behavioral failure.
@@ -160,7 +158,7 @@ See [`AGENTS.md`](AGENTS.md) and [`docs/agents.md`](docs/agents.md).
 ## Design rules
 
 1. **Deterministic evidence before model judgment.**
-2. **An LLM may interpret a receipt, but it never creates a VERIFIED state.**
+2. **An LLM may interpret a receipt, but it never creates a `verified` state.**
 3. **Verification belongs to an exact workspace fingerprint.**
 4. **Core verification must work offline.**
 5. **Vendor integrations are thin wrappers around the same core CLI/API.**
@@ -168,15 +166,20 @@ See [`AGENTS.md`](AGENTS.md) and [`docs/agents.md`](docs/agents.md).
 
 ## Development roadmap
 
-The next milestones are intentionally ordered so agents can work independently:
+Signed receipts, structural integrity analysis for all six languages, and
+end-to-end red/green proofs for the five non-Rust ones are all done. What is
+left is feature scope rather than defect:
 
-- the remaining mutation operators (condition negation, numeric return substitution);
-- resolving `let` bindings so a rebound subject is not reported as a removal;
-- targeted invocation and structural integrity analysis for the non-Rust adapters;
-- receipt signing/attestation;
-- signed receipt attestation.
+- targeted test invocation outside Rust, so a framework that supports narrowing
+  gets a narrowed run rather than always `full_suite`;
+- mutation outside Rust — the operators are defined over Rust syntax;
+- an organization policy for block/warn/ignore per integrity rule (distinct from
+  `[gate]`, which decides which *statuses* pass);
+- mock substitution around changed behaviour.
 
-See [`docs/roadmap.md`](docs/roadmap.md) for concrete work items.
+See [`docs/roadmap.md`](docs/roadmap.md) for the full list and
+[`docs/support-matrix.md`](docs/support-matrix.md) for what is verified rather
+than merely implemented.
 
 ## License
 

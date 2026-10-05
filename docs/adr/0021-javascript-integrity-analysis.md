@@ -1,6 +1,6 @@
 # ADR-0021: JavaScript integrity analysis uses the project's own parser
 
-Status: accepted
+Status: accepted; verified against real `acorn` and `typescript` after publication
 
 ## Context
 
@@ -63,12 +63,16 @@ reports syntactic errors the way the other tools do.
   the failure the support matrix records for the line-based fallback.
 - The traversal targets ESTree, which all three parsers produce, so supporting a
   fourth parser later is a lookup rather than new logic.
-- **The development environment has no parser installed and none can be added**,
-  so the end-to-end path is verified against the parser-absence contract — that a
-  project without a parser is *reported*, which is the branch that matters most
-  — plus hand-written ESTree cases for the traversal, which caught the `.not`
-  bug. A real acorn run has not been performed here, and the support matrix says
-  so.
+- ~~The development environment has no parser installed and none can be added.~~
+  **Superseded: it now runs against real parsers.** `acorn` and `typescript` are
+  dev dependencies and the end-to-end tests exercise both. That closed the last
+  verification gap in this ADR and found six bugs the parser-absence contract
+  and the hand-written ESTree cases had both missed — among them that ESTree's
+  `Literal` was never normalized, so `toBe(2)` and `toBe(3)` rendered
+  identically and `changed_expected_value` never fired for JavaScript at all.
+
+  The absence contract is still tested, and still matters: a project with no
+  parser is reported rather than analyzed more weakly.
 - The parser is resolved **from the project directory**, not from WitDiff's own
   installation. A parser WitDiff bundled could differ from the one the project
   tests with, and the difference would show up as inexplicable findings.
