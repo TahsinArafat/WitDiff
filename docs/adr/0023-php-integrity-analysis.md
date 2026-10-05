@@ -98,6 +98,28 @@ The third is the general lesson restated: a fixture can only assert what
 somebody already thought to write down. See the same argument in the JavaScript
 ADR.
 
+**A fourth bug is the one that mattered most, and it was not a token shape.**
+A WordPress-style test whose only check is
+`$this->expectException(RuntimeException::class)` was summarized with **zero
+assertions**. Deleting the guard therefore changed nothing a comparison could
+see, and the test went from asserting to asserting nothing with no finding.
+
+The red/green proof still passed in that case, and that is correct on its own
+terms — the experiment genuinely did distinguish two revisions. But the test had
+stopped constraining anything: the code was changed to stop throwing, and the
+guard was deleted so the test would stay green. PHPUnit itself flags that shape
+(`Tests: 1, Assertions: 0, Risky: 1.`); WitDiff read it as `verified`.
+
+The shared engine already had the right rule — a test that goes from asserting
+to asserting nothing is a `removed_assertion` — and it stayed silent only
+because the summary reported nothing for it to remove. **Fixing the summary was
+enough; no new rule was needed.** That is the strongest argument for keeping
+one rule engine across languages: the defect was a language adapter under-
+reporting, not a gap in the rules.
+
+An exception expectation is now rendered as `expects-exception`, which counts as
+an assertion without inventing a comparison the test never wrote.
+
 **A test that has never failed proves nothing, and one of ours did.** The
 PHPUnit count helper was added, then broken in three ways, and no test noticed
 twice. It was dead code that its own doc comment described as load-bearing. The
@@ -139,6 +161,12 @@ for this ADR:
   also pass on the base revision; they do not prove the behavioral change".
 - **Pest red/green proof**: same shape, `framework = "pest"` →
   `status: verified`, `red_green_proven: true`.
+- **A gutted WordPress-style test is now caught.** A base test asserting only
+  `expectException`, changed on head so the code stops throwing and the guard is
+  deleted → `high … [removed_assertion] test 'testMissingFileThrows' no longer
+  asserts anything; every check was removed`, and the note "red/green behavior
+  was observed, but high-severity test-integrity findings block verification".
+  Before the fix this same repository was reported `verified`.
 - **Pest weakening detection**: changing `toBe(5)` to `toBe(999)` →
   `high tests/CalcTest.php [changed_expected_value] test 'adds two numbers'
   changed the expectation from 'add(2, 3) Eq 5' to 'add(2, 3) Eq 999'`.

@@ -266,6 +266,23 @@ assertion prints neither `FAILURES!` nor `failed asserting that`, so without the
 count line it classified as `CommandFailure` — which cannot produce a proof, so
 Pest projects silently lost their red/green evidence.
 
+### An expectation is not an assertion, but it still constrains
+
+`expectException` and its family declare what the test expects rather than
+checking a value, so an early version did not count them. A WordPress-style test
+whose only check is `$this->expectException(RuntimeException::class)` was
+therefore summarized with zero assertions, and deleting the guard was invisible.
+
+That matters because it combines with the red/green proof into a false green:
+change the code to stop throwing, delete the guard, and the test passes while
+asserting nothing. The proof is genuine — the experiment really did distinguish
+two revisions — but the test no longer constrains anything. PHPUnit reports the
+shape itself (`Tests: 1, Assertions: 0, Risky: 1.`).
+
+An exception expectation is now counted. No new integrity rule was needed: the
+shared engine already reports a test that goes from asserting to asserting
+nothing, and it simply had nothing to compare.
+
 ### Dependencies must be present at the base revision
 
 The base experiment runs in a `git worktree`, which contains only committed

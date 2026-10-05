@@ -275,3 +275,49 @@ fn a_live_unparsable_phpunit_run_is_a_compile_failure() {
         "an unparsable file must classify as a compile failure:\n{output}"
     );
 }
+
+/// A WordPress-style test whose only check is `expectException`. Measured
+/// before this test existed: the tool summarized it with ZERO assertions, so
+/// deleting the guard changed nothing a comparison could see and the test went
+/// from asserting to asserting nothing with no finding — while the red/green
+/// proof still passed, because the experiment genuinely did distinguish two
+/// revisions. The test had stopped constraining anything.
+#[test]
+fn an_exception_expectation_counts_as_an_assertion() {
+    let source = "<?php\nclass LoaderTest extends TestCase {\n    public function testMissing(): void {\n        $this->expectException(\\RuntimeException::class);\n        (new Loader())->load('/nope');\n    }\n}\n";
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let path = dir.path().join("LoaderTest.php");
+    fs::write(&path, source).expect("write");
+    let toolchain = toolchain().expect("php");
+    let summary = toolchain.summarize(&path).expect("summarize");
+
+    let function = summary
+        .functions
+        .iter()
+        .find(|function| function.name == "testMissing")
+        .expect("testMissing");
+    assert_eq!(
+        function.assertions.len(),
+        1,
+        "an expectException call is the test's only check and must count"
+    );
+}
+
+/// Deleting that guard must be reported as a removal. This is the weakening the
+/// zero-assertion summary hid.
+#[test]
+fn deleting_an_exception_expectation_is_reported() {
+    let base = "<?php\nclass LoaderTest extends TestCase {\n    public function testMissing(): void {\n        $this->expectException(\\RuntimeException::class);\n        (new Loader())->load('/nope');\n    }\n}\n";
+    let head = "<?php\nclass LoaderTest extends TestCase {\n    public function testMissing(): void {\n        (new Loader())->load('/nope');\n    }\n}\n";
+
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let path = dir.path().join("LoaderTest.php");
+    fs::write(&path, head).expect("write head");
+    let toolchain = toolchain().expect("php");
+    let findings = analyze_php_test_change("LoaderTest.php", &toolchain, &path, Some(base));
+    assert!(
+        rules(&findings).contains(&"removed_assertion"),
+        "deleting the only check must be reported, got {:?}",
+        rules(&findings)
+    );
+}

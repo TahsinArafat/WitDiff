@@ -85,13 +85,18 @@ impl PhpToolchain {
     ///
     /// `php summarize.php <path>` needs no compilation step, so this is the
     /// cheapest of the language adapters.
-    fn summarize(&self, path: &Path) -> Result<FileSummary> {
+    ///
+    /// Public because a structural summary is what makes these claims checkable
+    /// from outside: a test that asserts "this file yields one assertion" is
+    /// only meaningful if a caller can read what the tool actually saw.
+    pub fn summarize(&self, path: &Path) -> Result<FileSummary> {
         let source = std::fs::read_to_string(path)
             .with_context(|| format!("failed reading {}", path.display()))?;
         self.summarize_source(&source)
     }
 
-    fn summarize_source(&self, source: &str) -> Result<FileSummary> {
+    /// Summarize PHP source held in memory.
+    pub fn summarize_source(&self, source: &str) -> Result<FileSummary> {
         let directory = tempfile::Builder::new()
             .prefix("witdiff-phpsummary-")
             .tempdir()

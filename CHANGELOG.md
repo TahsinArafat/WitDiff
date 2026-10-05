@@ -21,6 +21,14 @@
 
 ### Fixed
 
+- **A gutted PHP test could reach `verified`.** A WordPress-style test whose only
+  check is `expectException` was summarized with **zero assertions**, so deleting
+  that guard was invisible to the integrity rules. Combined with a change that
+  made the code stop throwing, the test passed while asserting nothing — and
+  PHPUnit itself flags that shape (`Assertions: 0, Risky: 1`). An exception
+  expectation now counts as an assertion, so the existing "no longer asserts
+  anything" rule fires. No new rule was needed; the summary was reporting
+  nothing for the engine to compare.
 - **A PHP verification failed its own freshness gate on the suite's cache.**
   `.phpunit.result.cache` and Pest's
   `vendor/pestphp/pest/.temp/test-results` are created by the act of running
