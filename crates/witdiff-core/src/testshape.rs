@@ -195,6 +195,43 @@ pub fn analyze(
                 ),
             ));
         }
+
+        // A test that asserts nothing *at all*, independent of the base.
+        //
+        // The rule above fires only when the base had assertions, which is the
+        // right default for a comparison: a test that never asserted is not a
+        // regression this change introduced. But it is still a test that
+        // constrains nothing, and if it is the only new test then the run has
+        // no evidence behind it. PHPUnit reports this shape itself
+        // (`Assertions: 0, Risky: 1`); most other frameworks do not.
+        //
+        // A failure guard counts as checking behaviour — Go's
+        // `if got != want { t.Fatal(...) }` is not an assertion but does fail
+        // the test — so `guards` is part of the condition.
+        //
+        // Severity `Warning`, not `High`, because it is not a regression.
+        // `High` blocks verification, and blocking on a test the author wrote
+        // this way would fail a repository that is behaving as intended. The
+        // severity separates "this change gutted a test" from "this test never
+        // checked anything".
+        if function.assertions.is_empty()
+            && !function.body_is_empty
+            && !function.skipped
+            && function.guards.is_empty()
+            && existing.is_none()
+        {
+            findings.push(finding(
+                Severity::Warning,
+                path,
+                function.line,
+                "assertion_free_test",
+                format!(
+                    "new test `{}` contains no assertion and no exception expectation, so it \
+                     cannot fail for a behavioral reason; it passes whatever the code does",
+                    function.name
+                ),
+            ));
+        }
     }
 
     let Some(base) = base else {
@@ -827,5 +864,95 @@ mod tests {
         assert_eq!(subject_of("f() Eq 1", &PYTHON).as_deref(), Some("f()"));
         // A bare subject with no comparison is its own subject.
         assert_eq!(subject_of("f()", &PYTHON).as_deref(), Some("f()"));
+    }
+
+    /// A brand-new test that asserts nothing is the `Risky` shape PHPUnit
+    /// names, and it is the one case the `removed_assertion` rule cannot see:
+    /// there is no base version of the function to have removed anything from.
+    #[test]
+    fn a_new_test_with_no_assertions_is_reported() {
+        let head = summary(vec![function("t", &[])]);
+        let findings = analyze("t.php", "PHP", &PYTHON, None, &head);
+        assert!(
+            rules(&findings).contains(&"assertion_free_test"),
+            "a new test that cannot fail must be reported, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// It must NOT block verification. A repository may legitimately contain a
+    /// test written this way, and a blocking finding would fail it.
+    #[test]
+    fn an_assertion_free_test_does_not_block() {
+        let head = summary(vec![function("t", &[])]);
+        let findings = analyze("t.php", "PHP", &PYTHON, None, &head);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.rule == "assertion_free_test")
+            .expect("assertion_free_test");
+        assert_eq!(finding.severity, Severity::Warning);
+    }
+
+    /// A test with an exception expectation is not assertion-free: it fails if
+    /// nothing is thrown. The PHP tool renders it as `expects-exception`.
+    #[test]
+    fn an_exception_expectation_is_not_assertion_free() {
+        let head = summary(vec![function("t", &["expects-exception"])]);
+        let findings = analyze("t.php", "PHP", &PYTHON, None, &head);
+        assert!(
+            !rules(&findings).contains(&"assertion_free_test"),
+            "an exception expectation constrains the test, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// A failure guard is not an assertion but does fail the test.
+    #[test]
+    fn a_failure_guard_is_not_assertion_free() {
+        let mut guarded = function("t", &[]);
+        guarded.guards = vec!["got != want".to_owned()];
+        let head = summary(vec![guarded]);
+        let findings = analyze("t.go", "Go", &PYTHON, None, &head);
+        assert!(
+            !rules(&findings).contains(&"assertion_free_test"),
+            "a test with a failure guard checks behaviour, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// A skipped test is reported by its own rule; adding this one on top would
+    /// be two findings for one fact.
+    #[test]
+    fn a_skipped_test_is_not_also_assertion_free() {
+        let mut skipped = function("t", &[]);
+        skipped.skipped = true;
+        let head = summary(vec![skipped]);
+        let findings = analyze("t.php", "PHP", &PYTHON, None, &head);
+        assert!(rules(&findings).contains(&"skipped_test"));
+        assert!(!rules(&findings).contains(&"assertion_free_test"));
+    }
+
+    /// An empty body is a placeholder, not a test that fails to prove anything.
+    #[test]
+    fn an_empty_body_is_not_assertion_free() {
+        let mut empty = function("t", &[]);
+        empty.body_is_empty = true;
+        let head = summary(vec![empty]);
+        let findings = analyze("t.php", "PHP", &PYTHON, None, &head);
+        assert!(!rules(&findings).contains(&"assertion_free_test"));
+    }
+
+    /// A test that already existed without assertions is not this change's
+    /// doing. Reporting it would flag every repository that has one.
+    #[test]
+    fn a_preexisting_assertion_free_test_is_not_reported() {
+        let head = summary(vec![function("t", &[])]);
+        let base = summary(vec![function("t", &[])]);
+        let findings = analyze("t.php", "PHP", &PYTHON, Some(&base), &head);
+        assert!(
+            !rules(&findings).contains(&"assertion_free_test"),
+            "an unchanged assertion-free test is not this change's fault, got {:?}",
+            rules(&findings)
+        );
     }
 }
