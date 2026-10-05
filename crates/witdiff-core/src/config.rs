@@ -165,10 +165,30 @@ impl VerificationConfig {
     /// An unrecognized name is an error: silently classifying with the Rust
     /// matcher would produce exactly the wrong-conservative answer ADR-0012
     /// exists to fix, and the operator would have no way to notice.
+    /// Resolve the configured framework.
+    ///
+    /// An unrecognized name fails loudly rather than falling back: silently
+    /// classifying another framework's output would turn a broken configuration
+    /// into a wrong verdict. The message therefore has to be actionable rather
+    /// than merely correct — a tester reported the previous wording as "fighting
+    /// with the unknown-framework error", because it listed valid values without
+    /// saying what the choice was *for* or where to look.
     pub fn framework(&self) -> anyhow::Result<TestFramework> {
         TestFramework::parse(&self.framework).ok_or_else(|| {
             anyhow::anyhow!(
-                "unknown test framework `{}`; supported values are {}",
+                "unknown test framework `{}`.\n\n\
+                 `verification.framework` selects whose output WitDiff classifies when the \
+                 base experiment fails. WitDiff implements one classifier per framework, and \
+                 only these: {}.\n\n\
+                 If yours is not listed, red/green proof is unavailable too, because WitDiff \
+                 cannot tell a test failure from a build failure in output it has never seen — \
+                 guessing there is exactly what would produce a false proof. Set \
+                 `verification.flake_repeats` and the analysis settings aside; they depend on \
+                 this classifier.\n\n\
+                 Structural test-integrity analysis needs a parser for the language. Supported \
+                 today: Rust, Python, Go, Java, Ruby, JavaScript/TypeScript. See \
+                 docs/support-matrix.md for what is proven per language, and what adding a \
+                 framework would cost.",
                 self.framework,
                 TestFramework::all()
                     .iter()
