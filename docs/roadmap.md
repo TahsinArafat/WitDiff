@@ -126,7 +126,7 @@ the key; WitDiff never creates or stores one.
 - [ ] coverage of changed branches as evidence (not as sole proof)
 - [x] dependency/version/environment fingerprint
 - [x] sandboxed verification runner
-- [ ] provenance chain across multiple verification stages
+- [x] provenance chain across multiple verification stages
 - [x] policy file for organization-specific gates
 
 Shipped so far in M6:
@@ -139,6 +139,11 @@ Shipped so far in M6:
 - **Gate policy** — `[gate]` in `witdiff.toml` commits which results pass, so a
   repository states it once rather than restating flags on every invocation.
   Flags may only tighten it.
+- **Provenance chain** — `.witdiff/provenance.json` links each receipt's digest
+  to the one before it, so a sequence of verifications can be checked as a
+  sequence rather than one at a time. Editing, dropping or reordering an entry
+  breaks the links that follow, and both `verify` and `receipt` report it.
+  Verified against a real tampering: rewriting a recorded digest is caught.
 - **Sandboxed runner** — `sandbox_image` rewrites every run into a named
   container, so the candidate-controlled `test_command` no longer executes on the
   host. Named so a timeout can remove it rather than leaving it running; an

@@ -115,6 +115,36 @@ Signing and verification are pure Rust (`ed25519-dalek`), so no JavaScript
 runtime is required for either. Keys are raw 32-byte files: a seed to sign, a
 public key to verify. WitDiff never creates one.
 
+## Provenance
+
+A receipt proves that one run happened. It says nothing about the runs around it:
+an operator who has been verifying this repository for a year can be shown a
+receipt for any one commit, but nothing in that receipt says whether it follows
+the last one, or whether somebody produced it after removing the inconvenient
+ones in between.
+
+`witdiff verify` therefore appends the receipt's digest to
+`.witdiff/provenance.json`, an append-only chain of up to 64 entries:
+
+```text
+hash_i = SHA-256(witdiff.receipt-provenance.v1 || sequence_i || previous_hash || receipt_digest)
+```
+
+Each entry carries the hash of the one before it, so editing, dropping, or
+reordering an entry breaks every link that follows. `witdiff receipt` reports
+whether the chain is intact, and `witdiff verify` reports it too — otherwise a CI
+run could pass while the recorded history had been altered.
+
+Like the signature, this is **tamper-evidence, not non-repudiation**: it shows
+the recorded sequence was not modified, not who wrote it. It is separate from the
+signature and neither depends on the other. The signature makes one receipt
+unforgeable; the chain makes a sequence unbreakable.
+
+Entries are bounded to 64 and trimmed from the front, so the chain attests to a
+retained window rather than to an unbounded history — a longer one belongs in the
+repository's own storage. Whatever preceded the window is not checked, and the
+first retained entry's predecessor is taken as given.
+
 ## Staleness
 
 A receipt is a claim about a revision. Nothing stops the code changing

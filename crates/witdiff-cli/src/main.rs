@@ -361,10 +361,42 @@ fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
         },
     )?;
 
+    let mut provenance_note = None;
     if !no_write {
-        let path = write_receipt(repo.root(), &receipt, output)?;
+        let (path, note) = write_receipt(repo.root(), &receipt, output)?;
+        provenance_note = note;
         if !json {
             println!("  receipt          : {}", path.display());
+        }
+    }
+
+    // A broken chain must be visible here too, not only on `witdiff receipt`.
+    // Otherwise a CI run reports a pass while the recorded history has been
+    // altered, which is exactly the case provenance exists to surface.
+    if !json {
+        let chain_path = witdiff_core::provenance::Chain::path_for(repo.root());
+        let problems =
+            witdiff_core::provenance::verify(&chain_path, receipt.verification_digest.as_deref())
+                .unwrap_or_else(|error| {
+                    vec![format!("the provenance chain could not be read: {error:#}")]
+                });
+        if !problems.is_empty() {
+            println!("  provenance       : BROKEN — {}", problems.join("; "));
+            println!(
+                "  next             : the recorded sequence was altered. Treat the history \
+                 as unverifiable; the current receipt still describes its own inputs."
+            );
+        }
+    }
+
+    // A failure to extend the chain does not invalidate the evidence, but it
+    // does mean continuity from here on is lost, and that is not something to
+    // swallow. The receipt is still written and the run still reports normally.
+    if let Some(note) = &provenance_note {
+        if !json {
+            println!("  provenance       : {note}");
+        } else {
+            eprintln!("witdiff: {note}");
         }
     }
 
@@ -536,6 +568,16 @@ fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> 
         },
     };
 
+    // The chain answers a question the freshness check cannot: whether this
+    // receipt is the last link of a contiguous history, rather than merely
+    // whether it still describes the working tree.
+    let chain_path = witdiff_core::provenance::Chain::path_for(repo.root());
+    let chain_problems =
+        witdiff_core::provenance::verify(&chain_path, receipt.verification_digest.as_deref())
+            .unwrap_or_else(|error| {
+                vec![format!("the provenance chain could not be read: {error:#}")]
+            });
+
     if json {
         // The JSON form stays machine-stable and gains the check as an additive
         // top-level field rather than changing the receipt document.
@@ -551,6 +593,21 @@ fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> 
                     serde_json::Value::String(warning),
                 );
             }
+            object.insert(
+                "provenance_intact".to_owned(),
+                serde_json::Value::Bool(chain_problems.is_empty()),
+            );
+            if !chain_problems.is_empty() {
+                object.insert(
+                    "provenance_problems".to_owned(),
+                    serde_json::Value::Array(
+                        chain_problems
+                            .iter()
+                            .map(|problem| serde_json::Value::String(problem.clone()))
+                            .collect(),
+                    ),
+                );
+            }
         }
         println!("{}", serde_json::to_string_pretty(&document)?);
     } else {
@@ -559,6 +616,23 @@ fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> 
             println!("  stale            : {warning}");
             println!(
                 "  next             : re-run `witdiff verify` to produce evidence for the current state."
+            );
+        }
+        if chain_problems.is_empty() {
+            let links = witdiff_core::provenance::Chain::load(&chain_path)
+                .map(|chain| chain.entries.len())
+                .unwrap_or(0);
+            if links > 0 {
+                println!("  provenance       : chain intact ({links} link(s))");
+            }
+        } else {
+            println!(
+                "  provenance       : BROKEN — {}",
+                chain_problems.join("; ")
+            );
+            println!(
+                "  next             : treat this receipt as unverifiable history. A broken \
+                 chain means the recorded sequence was altered."
             );
         }
     }

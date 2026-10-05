@@ -14,6 +14,7 @@ pub mod jsscript;
 pub mod model;
 pub mod mutation;
 pub mod mutation_runner;
+pub mod provenance;
 pub mod pyanalysis;
 pub mod pyscript;
 pub mod rubyanalysis;

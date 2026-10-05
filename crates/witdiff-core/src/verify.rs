@@ -1053,7 +1053,7 @@ pub fn write_receipt(
     repo_root: &std::path::Path,
     receipt: &Receipt,
     output: Option<PathBuf>,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, Option<String>)> {
     let path = output.unwrap_or_else(|| repo_root.join(".witdiff").join("receipt.json"));
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -1061,7 +1061,20 @@ pub fn write_receipt(
     }
     let bytes = serde_json::to_vec_pretty(receipt).context("failed serializing receipt")?;
     fs::write(&path, bytes).with_context(|| format!("failed writing {}", path.display()))?;
-    Ok(path)
+
+    // Only after the receipt is on disk: recording a receipt that was never
+    // written would make the chain claim something a consumer cannot hold.
+    let problem = match receipt.verification_digest.as_deref() {
+        Some(digest) => match crate::provenance::append(repo_root, digest) {
+            Ok(_entry) => None,
+            Err(error) => Some(format!(
+                "the receipt was written but could not be added to the provenance chain: {error:#}"
+            )),
+        },
+        // No digest, so nothing to chain on. Already noted by the digest step.
+        None => None,
+    };
+    Ok((path, problem))
 }
 
 #[cfg(test)]
