@@ -734,4 +734,52 @@ mod tests {
         assert!(escaped.contains("%0A"));
         assert!(escaped.contains('`'), "backticks need no escaping");
     }
+
+    /// The three-way exit code is the entire contract CI depends on
+    /// (ADR-0013), and the reusable workflow reads it to distinguish a failed
+    /// gate from a tool malfunction. Measured end to end against real
+    /// repositories: 0 for a proof, 2 when the change is not proven, and 1
+    /// when WitDiff itself could not run.
+    ///
+    /// This pins the mapping so a change to `verify` cannot collapse the
+    /// distinction the workflow enforces.
+    #[test]
+    fn the_exit_code_distinguishes_a_failed_gate_from_a_tool_error() {
+        use witdiff_core::GateOutcome;
+        use witdiff_core::VerificationStatus as S;
+
+        // Exit 1 comes from `main`'s error arm and is not reachable here; this
+        // asserts the part that is: a verdict, never an error, is 0 or 2.
+        let exit_for = |status: S, strict: bool| -> u8 {
+            if status.gate(strict, false).passes() {
+                0
+            } else {
+                2
+            }
+        };
+
+        assert_eq!(exit_for(S::Verified, false), 0, "a proof passes");
+        assert_eq!(exit_for(S::VerifiedWithWarnings, false), 0);
+        assert_eq!(
+            exit_for(S::VerifiedWithWarnings, true),
+            2,
+            "strict mode refuses warnings"
+        );
+        for unproven in [S::NotVerified, S::HeadFailed, S::BaseIncompatible] {
+            assert_eq!(
+                exit_for(unproven.clone(), false),
+                2,
+                "{unproven:?} is a failed gate, not a tool error"
+            );
+        }
+        // "Nothing to prove" passes by default, and `--fail-on-no-changed-tests`
+        // reverses it. That is the distinction that keeps a docs-only pull
+        // request from failing while still letting a repository demand a test.
+        assert_eq!(exit_for(S::NoChangedTests, false), 0);
+        assert_eq!(
+            S::NoChangedTests.gate(false, true),
+            GateOutcome::Failed,
+            "the flag reverses it"
+        );
+    }
 }

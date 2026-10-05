@@ -91,10 +91,16 @@ impl JsToolchain {
     fn summarize(&self, path: &Path) -> Result<FileSummary> {
         let source = std::fs::read_to_string(path)
             .with_context(|| format!("failed reading {}", path.display()))?;
-        self.summarize_source(&source)
+        self.summarize_source_named(&source, &temporary_name_for(path))
     }
 
-    fn summarize_source(&self, source: &str) -> Result<FileSummary> {
+    /// Summarize a source, writing it out under a file name that keeps its real
+    /// extension.
+    ///
+    /// The extension is load-bearing. The tool chooses a dialect from it, so
+    /// writing a `.tsx` file out as `input.js` made the TypeScript parser reject
+    /// valid JSX and the whole file was reported as unparsable.
+    fn summarize_source_named(&self, source: &str, file_name: &str) -> Result<FileSummary> {
         let directory = tempfile::Builder::new()
             .prefix("witdiff-jssummary-")
             .tempdir()
@@ -103,7 +109,7 @@ impl JsToolchain {
         let tool = directory.path().join("summarizer.js");
         std::fs::write(&tool, SUMMARY_SCRIPT)
             .context("failed writing the JavaScript summary tool")?;
-        let target = directory.path().join("input.js");
+        let target = directory.path().join(file_name);
         std::fs::write(&target, source).context("failed writing the JavaScript target file")?;
 
         // The working directory is the *project*, not the temporary directory:
@@ -220,6 +226,25 @@ struct WireAssertion {
     test: String,
 }
 
+/// The name a source is written out under before parsing.
+///
+/// Only the extension is carried over, and only when WitDiff recognizes it;
+/// anything else is written as `.js`. The parser chooses a dialect from this,
+/// so a `.tsx` file must not arrive as `.js`.
+fn temporary_name_for(path: &Path) -> String {
+    const KNOWN: [&str; 5] = ["js", "jsx", "mjs", "cjs", "ts"];
+    let extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let known = KNOWN.contains(&extension.as_str()) || extension == "tsx";
+    if known {
+        format!("input.{extension}")
+    } else {
+        "input.js".to_owned()
+    }
+}
+
 /// Analyze a Java test file by comparing its base and head revisions.
 pub fn analyze_javascript_test_change(
     path: &str,
@@ -258,10 +283,11 @@ pub fn analyze_javascript_test_change(
 
     let base = match base_source {
         None => None,
-        Some(source) => match toolchain.summarize_source(source) {
-            Ok(summary) if summary.error.is_none() => Some(summary),
-            Ok(summary) => {
-                findings.push(crate::testshape::finding(
+        Some(source) => {
+            match toolchain.summarize_source_named(source, &temporary_name_for(Path::new(path))) {
+                Ok(summary) if summary.error.is_none() => Some(summary),
+                Ok(summary) => {
+                    findings.push(crate::testshape::finding(
                     Severity::Info,
                     path,
                     0,
@@ -271,10 +297,10 @@ pub fn analyze_javascript_test_change(
                         summary.error.unwrap_or_default()
                     ),
                 ));
-                None
-            }
-            Err(error) => {
-                findings.push(crate::testshape::finding(
+                    None
+                }
+                Err(error) => {
+                    findings.push(crate::testshape::finding(
                     Severity::Info,
                     path,
                     0,
@@ -283,9 +309,10 @@ pub fn analyze_javascript_test_change(
                         "the base revision of this JavaScript test file could not be analyzed, so removed assertions and changed expectations were not compared: {error}"
                     ),
                 ));
-                None
+                    None
+                }
             }
-        },
+        }
     };
 
     findings.extend(crate::testshape::analyze(

@@ -73,14 +73,29 @@ jobs:
         env:
           WITDIFF: 1
         run: |
-          set -o pipefail
+          # GitHub runs an unspecified shell as `bash -e {0}`, so a non-zero
+          # exit aborts the script at the failing line. The previous
+          # `witdiff ... | tee out; echo "exit_code=$?"` form therefore never
+          # reached the echo: `witdiff verify` exiting 2 — a failed
+          # verification gate — aborted the step, `exit_code` stayed unset, and
+          # the enforce step below saw an empty string and reported it as a
+          # tool malfunction. The three-way distinction this workflow exists to
+          # preserve was inverted for the most common outcome.
+          #
+          # `set +e` around the run, with the code captured immediately, keeps
+          # the exit code regardless. Process substitution rather than a pipe
+          # avoids relying on `pipefail` to propagate witdiff's status past
+          # `tee`.
+          set +e
           ./.witdiff-tool/target/release/witdiff verify \
             --base "origin/${{ inputs.base-ref }}" \
             --github-annotations \
             ${{ inputs.strict && '--strict' || '' }} \
             ${{ inputs.fail-on-no-changed-tests && '--fail-on-no-changed-tests' || '' }} \
-            2>&1 | tee witdiff-output.txt
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+            > >(tee witdiff-output.txt) 2>&1
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
 
       - name: Summarize
         if: always()
@@ -112,8 +127,15 @@ jobs:
           fi
           # Exit code 2 is a failed verification gate, not a tool crash.
           # Exit code 1 is a WitDiff malfunction and is reported as such.
+          #
+          # An empty value means the capture step failed for some reason this
+          # workflow does not know about. It is reported as a tool error rather
+          # than passed, because an unknown verdict must never be treated as a
+          # passing gate.
           if [ "$code" = "2" ]; then
             echo "::error::WitDiff verification did not pass (exit 2). See the annotations above."
+          elif [ -z "$code" ]; then
+            echo "::error::WitDiff did not report a verdict; this is a tool error, not a verification result."
           else
             echo "::error::WitDiff failed to run (exit $code); this is a tool error, not a verification result."
           fi

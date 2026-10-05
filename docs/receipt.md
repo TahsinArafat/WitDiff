@@ -80,10 +80,13 @@ Verifying is a separate, key-free concern in the common case: `witdiff receipt`
 reports whether a receipt's signature covers its own digest, and cryptography
 requires the public key, which is the operator's to supply.
 
-If signing fails — no Node, an unreadable key, no digest — the receipt is still
-written, unsigned, and a note says so. An unsigned receipt is a fact, not a
-failure. Set `signing_failure_exit_code = 2` to make an unsigned receipt fail a
-CI gate.
+If signing fails — an unreadable key, no digest — the receipt is still written,
+unsigned, and a note says so. An unsigned receipt is a fact, not a failure. Set
+`signing_failure_exit_code = 2` to make an unsigned receipt fail a CI gate.
+
+Signing and verification are pure Rust (`ed25519-dalek`), so no JavaScript
+runtime is required for either. Keys are raw 32-byte files: a seed to sign, a
+public key to verify. WitDiff never creates one.
 
 ## Staleness
 

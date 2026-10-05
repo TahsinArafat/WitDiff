@@ -1,0 +1,10 @@
+{
+  "name": "witdiff-js-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Parsers used by the end-to-end JavaScript analysis tests (ADR-0021). WitDiff never bundles a parser; the analyzer requires the project's own, so the tests must supply one.",
+  "devDependencies": {
+    "acorn": "^8.18.0",
+    "typescript": "^5.9.0"
+  }
+}

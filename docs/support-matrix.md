@@ -49,11 +49,18 @@ Verified end to end against real toolchains:
   Before ADR-0012 the same output classified as `command_failure`, which cannot
   produce a proof.
 - **Go** — likewise, using real `go test` output.
+- **Ruby / RSpec** — likewise, against a live RSpec 3.13.
+- **JavaScript / TypeScript** — likewise, against a real Node runner with a
+  Jest-shaped summary and a real `acorn` in the project's `node_modules`.
 
-JavaScript classification is covered by unit tests against captured Jest and
-Vitest output. It has **not** been verified end to end against a real runner in
-this environment, because neither is installed. Treat it as tested but not
-proven until someone runs it.
+`crates/witdiff-core/tests/verify_languages_end_to_end.rs` runs the whole chain
+for each of them against a real temporary Git repository: HEAD green, pristine
+base control green, and base-plus-transplanted-test red **for a recognized test
+reason**. Verifying an analyzer against a real parser is not the same as
+proving the verification works, and this file makes that distinction explicit.
+
+JavaScript classification is also covered by unit tests against captured Jest
+and Vitest output.
 
 ## Python structural analysis (ADR-0016)
 
@@ -171,13 +178,45 @@ compares; `toBeTruthy`, `toContain` and the other predicate matchers constrain
 the subject alone, so they normalize to the subject; `.not.toBe(y)` normalizes
 as an inequality.
 
-**Not verified against a real parser here.** This development environment has no
-JavaScript parser and no way to install one, so the end-to-end path is verified
-through the parser-absence contract — that a project without a parser is
-reported, which is the branch that matters most — plus hand-written ESTree cases
-for the traversal. Those caught a real bug: `.not.toBe` nests one level deeper
-than `.toBe`, and reading the matcher without unwrapping returned nothing for
-every negated expectation. A run against real acorn in CI would close the gap.
+**Verified end to end against a real parser.** This was the last gap in the
+JavaScript row, closed by installing `acorn` and `typescript` as dev
+dependencies and running the analyzer against them.
+
+Running the tool for real found six bugs, all of which had passed the previous
+verification. Each is now covered by a test that runs a real parser:
+
+- **ESTree's `Literal` was not normalized.** The tool handled Babel's
+  `NumericLiteral`/`StringLiteral` but not acorn's `Literal`, so every literal
+  rendered as the bare word `Literal`. `expect(x).toBe(2)` and
+  `expect(x).toBe(3)` were therefore **identical strings**, and no expectation
+  change was ever reported. This was the whole capability, silently absent.
+- **`expect(x).not.toBe(1)` produced no assertion at all.** acorn puts `.not`
+  between the call and the matcher, so the previous unwrap missed it. Inverting
+  an assertion — which makes it pass for the wrong reason — reported nothing.
+- **`test.skip` produced no function at all.** Only the bare `test(...)` form
+  was recognized, so newly skipping a test was invisible. `test.only` and
+  `test.each` were missed the same way.
+- **Node's `assert` module was invisible.** `assert.strictEqual(a, 1)` and
+  `assert.deepEqual(a, 1)` are member calls, and only a bare `assert*(...)`
+  form was recognized.
+- **TypeScript files crashed or analyzed as empty.** The TypeScript AST tags
+  nodes with `kind`, not `type`, so the ESTree traversal visited nothing; with
+  `setParentNodes` on, the tree was cyclic and the traversal recursed until
+  `Maximum call stack size exceeded`. Literal kinds also reverse-map to the
+  alias `FirstLiteralToken`, so `2` normalized to that word.
+- **`.tsx` was rejected.** Every file was written to disk as `input.js`, so the
+  parser never saw a `.tsx` extension and rejected valid JSX. The extension is
+  load-bearing and is now preserved.
+
+One bug was **not** in the JavaScript analyzer at all. Inverting an assertion
+changed nothing, because the shared engine's `expectation_of` returned only the
+right-hand side, making `Eq 1` and `NotEq 1` compare equal. That affected every
+language using the operator-string form; Rust was unaffected only because its
+analyzer compares `macro_name`. Fixed in `testshape`, so all languages get it.
+
+`acorn` and `typescript` are now dev dependencies and the JS end-to-end tests
+run against both. Measured: the two parsers produce byte-identical summaries
+for the same source, which is what makes one traversal trustworthy for both.
 
 ## Other languages: assessment, not support
 
@@ -210,12 +249,26 @@ using either style gets the same rules. RSpec examples are `it "..." do` blocks
 rather than `def`, so they need their own collection, and both styles share one
 body extraction so the two forms cannot drift in what they detect.
 
-Verified against `Ripper.sexp` rather than a live RSpec run: RSpec could not be
-installed in the development environment (`gem install` is blocked), so the
-normalization is verified against the parser's own output for every form, and
-the end-to-end tests exercise the analyzer end to end with RSpec sources. A
-predicate matcher such as `be_truthy` normalizes to the subject alone, since that
-is what it checks.
+**Verified against a live RSpec.** RSpec 3.13 was installed and run, which
+closed the last unverified claim in the Ruby row and found two classifier bugs:
+
+- **A single-example red suite was classified as an unrecognized command
+  failure.** The summary matcher required the plural `" examples,"`, but real
+  RSpec prints `1 example, 1 failure` for a one-example suite. Because an
+  unrecognized failure cannot produce a proof, every single-example Ruby suite
+  silently lost its red/green evidence. Minitest has the same singular shape
+  (`1 run, 1 failures, 0 errors`) and the same gap.
+- **A suite that failed to load was reported as a behavioural regression.** Real
+  RSpec reports a `LoadError` as `0 examples, 0 failures, 1 error occurred
+  outside of examples` — a non-zero *error* count on a summary line whose
+  failure count is zero. The test-failure check ran first and claimed it. Ruby
+  now checks compile failure **before** test failure, the reverse of every
+  other framework, because a load error is never behavioural evidence.
+
+Also recorded, since no output fixture could ever have shown it: RSpec's
+default pattern is `**/*_spec.rb`. A spec file named `calc.rb` runs **zero**
+examples and exits **successfully** — a silent pass with no output to copy. The
+same source named `calc_spec.rb` fails. That difference is now a test pair.
 
 Recognized output, verified against real runs:
 
@@ -279,24 +332,53 @@ pattern list.
 
 ## Known verification gaps
 
-Three things were **verified as far as this environment allowed, but not
-verified end to end against a real tool**. Each is a place a real bug could
-still hide. They are environment limits, not design decisions, and CI with real
-dependencies closes all three.
-
 | # | Not verified against | Verified instead by | Where | ADR |
 | --- | --- | --- | --- | --- |
-| 1 | a live **RSpec** run | `Ripper.sexp` output for every RSpec form, plus end-to-end analyzer tests over RSpec sources | Ruby: `expect(x).to eq(y)` and `.not.to` | ADR-0020 |
-| 2 | a real **`acorn`** / `@babel/parser` | the parser-absence contract (a project with no parser is reported), plus hand-written ESTree cases | JavaScript: parser resolution and `.not` | ADR-0021 |
-| 3 | **`ed25519-dalek`** | Node's built-in Ed25519, sign and verify exercised | signature over status and digest | ADR-0022 |
+| 1 | ~~a live **RSpec** run~~ | **closed: verified against RSpec 3.13** | Ruby: framework classification | ADR-0020 |
+| 2 | ~~a real **`acorn`** / `@babel/parser`~~ | **closed: verified against real acorn and typescript** | JavaScript | ADR-0021 |
+| 3 | ~~`ed25519-dalek`~~ | **closed: signing and verification run entirely in Rust** | signature over status and digest | ADR-0022 |
 
-Why each was blocked: `gem install` and cargo cache writes are denied in the
-development environment, and macOS ships LibreSSL, which does not implement
-Ed25519 at all.
+Those three were blocked by the environment, not by design: `gem install` and
+cargo cache writes were denied, and macOS ships LibreSSL, which does not
+implement Ed25519 at all. With the restrictions lifted, each was verified
+against the real tool, and each found real bugs.
 
-Task 2 is the one most likely to surface a real defect. Node resolves `require`
-from the *script's* directory rather than the working directory, so a nested
-`node_modules` and a `.ts`/`.tsx` file are the cases worth checking first.
+### What remains
+
+**Red/green proof is end to end for all five supported languages.** Each reaches
+a proof against a real temporary repository with a real toolchain: `Verified`
+for pytest, Go, Ruby and JavaScript, and `VerifiedWithWarnings` for Java — see
+below for why Java is one notch lower.
+
+Python additionally has negative tests: a test that passes on the base is
+reported `not_verified`, and a gutted assertion is caught rather than accepted.
+The others have the positive path only.
+
+**Java proves red/green but loses structural analysis.** Its red/green chain is
+verified against a real JUnit 5 platform, so the failure classification and the
+transplant are proven. The status is `VerifiedWithWarnings` rather than
+`Verified` for one reason: when the configured test command is a script rather
+than `java`/`mvn`/`gradle`, `JavaToolchain::from_test_command` cannot derive a
+toolchain, so the structural comparison does not run and the receipt says so
+with a `test_source_unparsable` finding. Fewer findings, never wrong ones — but
+a real limitation, and a wrapper script is common in CI.
+
+Two things the Java work found by running the real thing, neither visible from
+reading the code:
+
+- **Mixed JUnit versions fail silently.** A `1.14.4` platform with a `6.0.1`
+  Jupiter engine compiles the tests, runs them, prints `0 tests found`, and
+  exits 0. A green run that executed nothing is exactly the result this project
+  must not accept, and no amount of reading file names reveals it.
+- **Build output must be gitignored**, or the first `javac` mutates the
+  workspace and the fingerprint correctly reports stale evidence.
+
+The recurring lesson is the one this project is built on: every bug above was
+found by running the thing, and every one of them had already passed whatever
+verification its ADR claimed. A hand-written fixture can only assert what
+somebody already thought to write down; it cannot show that a real runner prints
+`1 example, 1 failure` in the singular, or that a parser emits `Literal` where
+the code expected `NumericLiteral`.
 
 ## Adding a language
 

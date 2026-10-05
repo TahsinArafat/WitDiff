@@ -76,23 +76,62 @@ cargo run -p witdiff -- verify --base HEAD~1
 
 Read `docs/roadmap.md`. High-value tasks currently are:
 
-1. three verifications that this environment could not perform, all recorded in
-   their ADRs as environment workarounds rather than design choices:
-   - running the Ruby and JavaScript analyzers end to end against a real RSpec
-     and a real `acorn`. Both are verified against their parsers' own output
-     and against the parser-absence contract, but never against a live run,
-     because `gem install` and a JavaScript parser cannot be installed here.
-     CI with real dependencies would close both;
-   - replacing the Node-based Ed25519 helper with a Rust crate. `ed25519-dalek`
-     resolves but cannot be fetched here, and macOS LibreSSL has no Ed25519, so
-     Node's built-in crypto was the only implementation that could be verified.
+1. **Reproducing this project's own verification gaps, because every one of them
+   was a real bug and none was visible without running the thing.** All three
+   gaps in `docs/support-matrix.md` have since been closed by installing the real
+   dependencies — `acorn`, `typescript`, a live RSpec — and running the analyzers
+   against them. That found nine bugs: six in JavaScript, two in Ruby's
+   classifier, and one in the shared rule engine (`testshape`) that had affected
+   every language using it:
 
-Integration tests, syntax-aware integrity analysis including `match`-arm
-comparison, targeted test selection, inline `#[cfg(test)]` transplantation
-(ADR-0010), changed-code mutation (ADR-0011), framework-specific failure
-classification (ADR-0012), CI gating with annotations (ADR-0013), and the MCP
-server (ADR-0014) are done;
-see `docs/roadmap.md` for what shipped.
+   - JavaScript normalized no `Literal` node, so `toBe(2)` and `toBe(3)` rendered
+     identically and **no expectation change was ever reported**;
+   - `.not.toBe` produced no assertion at all, so inverting one went unreported;
+   - `test.skip`, `test.only` and `test.each` produced no test function;
+   - Node's `assert` module was invisible;
+   - every `.ts`/`.tsx` file either crashed or analyzed as empty;
+   - Ruby classified a single-example red suite as an unrecognized command
+     failure, and a suite that failed to load as a behavioural regression;
+   - `testshape` compared only the right-hand side of an assertion, so
+     `Eq 1` → `NotEq 1` — inverting an assertion — reported nothing.
+
+   Signing now runs entirely in Rust through `ed25519-dalek` (ADR-0022), so no
+   JavaScript runtime is needed to sign or verify a receipt.
+
+   The lesson worth carrying: a hand-written output fixture can only assert what
+   somebody already thought to write down. It cannot show you that real RSpec
+   prints `1 example, 1 failure` in the singular, or that a real parser emits
+   `Literal` where the code expected `NumericLiteral`. **Write the test, run it
+   against the real tool, and believe the output over the code.**
+
+   CI now runs the `--ignored` suite with every toolchain installed, so this
+   work cannot rot silently. Three things that had to be fixed for it to run
+   there at all, all found by running it rather than by reading it:
+
+   - the reusable workflow's exit code was never captured, because GitHub runs
+     an unspecified shell as `bash -e` and a non-zero verify aborted the step
+     first — so a failed gate was reported as a tool malfunction;
+   - the JavaScript tests need `npm ci`, or they skip;
+   - the Java fixture needs a JUnit 5 runtime, and a JUnit classpath whose
+     versions agree. Mixed versions print `0 tests found` and exit 0.
+
+2. **Java reaches `VerifiedWithWarnings`, not `Verified`.** Its red/green chain
+   is proven end to end against a real JUnit 5 platform, but a script-shaped
+   test command gives `JavaToolchain::from_test_command` nothing to work from, so
+   structural analysis is skipped and reported. Teaching the Java analyzer to
+   recognise a wrapper script would close the last notch.
+
+   The Java fixture also found something worth remembering: **mixing JUnit
+   platform versions fails silently.** A `1.14.4` platform with a `6.0.1` Jupiter
+   engine compiles, runs, prints `0 tests found` and exits 0 — a green run that
+   tested nothing. Version-align any JUnit classpath you assemble.
+
+3. Integration tests, syntax-aware integrity analysis including `match`-arm
+   comparison, targeted test selection, inline `#[cfg(test)]` transplantation
+   (ADR-0010), changed-code mutation (ADR-0011), framework-specific failure
+   classification (ADR-0012), CI gating with annotations (ADR-0013), and the MCP
+   server (ADR-0014) are done;
+   see `docs/roadmap.md` for what shipped.
 
 ## What not to build yet
 
