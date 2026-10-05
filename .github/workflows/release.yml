@@ -23,6 +23,9 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # Bounds how long a job may run. It does not bound queueing, which is why
+    # the publish job below cancels a runner that never starts — see its
+    # "Cancel a runner that never started" step.
     strategy:
       # A single platform failure should not discard the artifacts the others
       # produced; the release step below refuses to publish a partial set.
@@ -38,14 +41,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: witdiff-aarch64-apple-darwin.tar.gz
-          # `macos-13` is retired and the job would queue forever rather than
-          # fail, which is how this was found: four targets built and one sat
-          # queued with no error. `macos-15-intel` is the current Intel label,
-          # though it is availability-constrained in practice — see the
-          # "Require the expected platforms" step for how that is handled.
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            archive: witdiff-x86_64-apple-darwin.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: witdiff-x86_64-pc-windows-msvc.zip
@@ -131,33 +126,20 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      # A partial release would hand users a download that does not exist for
-      # their platform, so the set must be complete before publishing.
-      #
-      # `REQUIRED` is a workflow-level variable rather than a hard-coded 5,
-      # because `macos-15-intel` has been observed to sit queued indefinitely
-      # while every other runner starts in about two minutes. That is capacity,
-      # not a defect, and it must not be able to block a release: lowering the
-      # variable publishes the platforms that are reliably available, and the
-      # missing one is recorded in the job summary rather than passed over.
-      - name: Require the expected platforms
-        env:
-          REQUIRED: ${{ vars.WITDIFF_RELEASE_TARGETS || '5' }}
+      # Every platform must be present, or the release is refused. The set is
+      # now one that reliably schedules: the Intel macOS runner this matrix used
+      # to carry sat queued for up to 19 minutes and then failed, so it was
+      # dropped rather than worked around.
+      - name: Require every platform
         run: |
+          # Four: linux x64, linux arm64, macos arm64, windows x64.
+          expected=4
           found=$(ls artifacts/*.tar.gz artifacts/*.zip 2>/dev/null | wc -l)
-          echo "archives found: $found, required: $REQUIRED"
+          echo "archives found: $found, expected: $expected"
           ls -la artifacts
-          if [ "$found" -lt "$REQUIRED" ]; then
-            echo "::error::expected at least $REQUIRED platform archives, found $found; refusing to publish a partial release"
+          if [ "$found" -ne "$expected" ]; then
+            echo "::error::expected $expected platform archives, found $found; refusing to publish a partial release"
             exit 1
-          fi
-          if [ "$found" -lt 5 ]; then
-            {
-              echo "### Partial release: $found of 5 platforms"
-              echo
-              echo "Publishing because \`WITDIFF_RELEASE_TARGETS\` is set to $REQUIRED."
-              echo "Platforms not present have no download for this release."
-            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Combine checksums

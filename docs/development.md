@@ -58,14 +58,23 @@ is worth having as a check rather than a claim: the workspace declared 1.78
 while a transitive dependency had moved to edition 2024 and `globset` required
 1.88, so the documented floor was false until it was measured.
 
-By default every platform must build, or the release is refused — a partial
-release hands users a download that does not exist for them. `macos-15-intel`
-is the exception in practice: across three runs it sat queued for 16 to 18
-minutes while the other four started in about two. That is capacity rather than
-a defect, so the threshold is a repository variable,
-`WITDIFF_RELEASE_TARGETS`. Lowering it publishes the platforms that are reliably
-available and records the missing one in the job summary; the default is all
-five.
+The matrix is four targets, and every one must build or the release is refused —
+a partial release hands users a download that does not exist for them:
+
+| Runner | Target |
+| --- | --- |
+| `ubuntu-latest` | `x86_64-unknown-linux-gnu` |
+| `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` |
+| `macos-latest` | `aarch64-apple-darwin` |
+| `windows-latest` | `x86_64-pc-windows-msvc` |
+
+Intel macOS was in the matrix initially and was dropped. Its runner label is
+valid, but it queued for 16 to 19 minutes across three runs and then failed,
+while the other four started in about two minutes and finished — a 21-day-old
+Apple Silicon Mac runs the arm64 binary under Rosetta, so the Intel build bought
+nothing worth that. Adding it back means accepting a release that may not
+publish, which is why the requirement is now unconditional rather than
+configurable.
 
 ## End-to-end verification tests
 
