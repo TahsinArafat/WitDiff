@@ -26,7 +26,7 @@
 //! this, the base worktree would fall back to `~/.cargo`'s shared registry but
 //! a private target dir, and the two runs would each pay full compile cost.
 
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::Path};
 
 use std::process::Command as StdCommand;
 
@@ -1605,32 +1605,22 @@ fn a_missing_key_is_reported_rather_than_ignored() {
     );
 }
 
-/// Write a throwaway Ed25519 key, or return `None` when Node is unavailable.
+/// Write a throwaway Ed25519 signing key.
+///
+/// Generated in Rust: the backend is `ed25519-dalek`, so requiring Node to
+/// produce a key would leave the test skipping on a machine that can actually
+/// run it. WitDiff never creates keys in normal operation; a test needs one, and
+/// this is the test supplying it.
 fn write_ed25519_key() -> Option<std::path::PathBuf> {
-    if !Command::new("node")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
-        return None;
-    }
-    let path = std::env::temp_dir().join(format!("witdiff-test-key-{}.pem", std::process::id()));
-    let script = r#"
-const c = require("crypto"), fs = require("fs");
-const { privateKey } = c.generateKeyPairSync("ed25519");
-// argv[2], not argv[1]: argv[1] is this script's own path, and writing the
-// key there overwrote the script before it could run.
-fs.writeFileSync(process.argv[2], privateKey.export({ type: "pkcs8", format: "pem" }));
-"#;
-    let script_path =
-        std::env::temp_dir().join(format!("witdiff-keygen-{}.js", std::process::id()));
-    fs::write(&script_path, script).expect("write keygen");
-    let status = Command::new("node")
-        .arg(&script_path)
-        .arg(&path)
-        .status()
-        .expect("run keygen");
-    let _ = fs::remove_file(&script_path);
-    assert!(status.success(), "key generation should succeed");
+    // A fixed seed, so a failure is reproducible.
+    let seed: [u8; 32] = [
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        0x00, 0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2,
+        0xe1, 0xf0,
+    ];
+    let directory = std::env::temp_dir().join(format!("witdiff-keys-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).ok()?;
+    let path = directory.join("signing.key");
+    std::fs::write(&path, seed).ok()?;
     Some(path)
 }
