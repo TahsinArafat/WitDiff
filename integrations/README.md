@@ -16,6 +16,43 @@ Every one carries the same instructions: run the verification, quote the
 receipt, and never present a failed gate as success. They differ only in how the
 harness loads them.
 
+## Install
+
+```bash
+integrations/install.sh              # into the current project
+integrations/install.sh --global     # into your user config
+integrations/install.sh --uninstall  # remove only what this installed
+```
+
+Or from anywhere, without a checkout:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh | sh
+```
+
+It installs only the harnesses you actually have, and it never overwrites a file
+you have edited — each skipped file is reported.
+
+## Uninstall
+
+```bash
+integrations/install.sh --uninstall
+```
+
+Removes the four files it ships: the Claude Code skill, the OpenCode plugin and
+skill, and the Cursor rule. Shared directories are removed with `rmdir` so a
+directory still holding your own files is left alone, and the script says what
+it declined to remove.
+
+**Pi keeps its own record**, so it is not touched by the above. Remove the
+package with:
+
+```bash
+pi remove <path-to>/integrations/pi
+```
+
+or, if it was installed with `--local`, edit `.pi/settings.json`.
+
 ## The one command
 
 ```bash

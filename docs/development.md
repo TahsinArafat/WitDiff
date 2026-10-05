@@ -42,9 +42,25 @@ That test exists because a malformed integration does not fail loudly. The
 harness simply does not load it, which is indistinguishable from a working
 integration with nothing to say.
 
-`integrations/install.sh` copies them into a project or your home config. It
-never overwrites an existing file, and it deletes nothing — a test asserts it
-contains no removal command, so an edit you made is never lost to a re-run.
+Two installers ship, both tested:
+
+- **`install.sh`** (root) fetches a release for the current platform, verifies it
+  against `SHA256SUMS`, and installs the binary. It never uses `sudo`, and it
+  fails closed: a checksum mismatch reports and stops rather than warning. It
+  falls back across `sha256sum`, `shasum` and `openssl`, because the first is
+  Linux-only and the second macOS-only.
+- **`integrations/install.sh`** places the harness packages. It never overwrites
+  an existing file, so an edit you made is never lost to a re-run.
+
+Both support `--uninstall`. Removals are aimed only at paths the installer
+created — shared directories are emptied with `rmdir`, which refuses when
+non-empty, so a skill you wrote yourself survives. A test asserts each removal
+targets an installed path, and that both scripts document the way back out.
+
+The platform list in `install.sh` is checked against the release matrix in
+`.github/workflows/release.yml` by executing the installer's own archive-mapping
+logic, not by searching its source: a string search passes while the mapping is
+broken, because the target triples also appear in the platform-detection branch.
 
 ## Building a release
 

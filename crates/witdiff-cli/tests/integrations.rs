@@ -259,42 +259,170 @@ fn the_manifests_point_at_files_that_exist() {
         "the plugin file must exist"
     );
 }
-
-/// The installer must not be able to delete a user's files.
+/// The installer must know how to remove what it installed.
 ///
-/// It previously wrote a marker into a path built from the *file* rather than
-/// its directory, which failed loudly; the real risk is the opposite, a marker
-/// that makes the script treat an arbitrary directory as its own. This asserts
-/// the script contains no recursive delete at all, which is the property that
-/// matters rather than the absence of one particular bug.
+/// Without this, a user who tries the tool has no documented way back to a
+/// clean state. Asserted rather than assumed because both installers gained
+/// their uninstall path after the fact, and a regression would be invisible
+/// until someone needed it.
 #[test]
-fn the_installer_cannot_delete_anything() {
-    let script = integrations().join("install.sh");
-    let text = std::fs::read_to_string(&script).expect("read install.sh");
+fn both_installers_support_uninstall() {
+    let dir = integrations();
+    let root = dir.parent().expect("repository root");
+    for path in [root.join("install.sh"), dir.join("install.sh")] {
+        let text = std::fs::read_to_string(&path).expect("read installer");
+        assert!(
+            text.contains("--uninstall"),
+            "{}: must accept --uninstall, or a user cannot undo the install",
+            path.display()
+        );
+        assert!(
+            text.contains("removed"),
+            "{}: must report what it removed",
+            path.display()
+        );
+    }
+}
 
-    // Comments are stripped first: the script explains why it does not delete,
-    // and matching that prose would fail the very check it describes.
+/// Every installer must handle every platform the release publishes.
+///
+/// This executes the installer's own archive-selection logic rather than
+/// pattern-matching its source. A string search passed while the mapping was
+/// broken, because the target triples also appear in the platform-detection
+/// branch: it could not tell "handles this target" from "mentions this target",
+/// which is the whole distinction the test exists to make.
+#[test]
+fn the_binary_installer_covers_every_published_platform() {
+    let dir = integrations();
+    let root = dir.parent().expect("repository root");
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .expect("read release workflow");
+    let script = std::fs::read_to_string(root.join("install.sh")).expect("read install.sh");
+
+    // Lift the archive-selection `case` out of the installer, so what runs is
+    // the shipped logic rather than a copy of it that could drift.
+    let case_start = script
+        .find("case \"$target\" in")
+        .expect("install.sh must select an archive by target");
+    let case_end = script[case_start..]
+        .find("esac\n")
+        .expect("the archive case must terminate")
+        + case_start
+        + "esac\n".len();
+    let mapping = &script[case_start..case_end];
+
+    let targets = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+    ];
+
+    for target in targets {
+        assert!(
+            workflow.contains(target),
+            "{target} must be in the release matrix"
+        );
+        let expected = if target.contains("windows") {
+            format!("witdiff-{target}.zip")
+        } else {
+            format!("witdiff-{target}.tar.gz")
+        };
+
+        let probe = format!(
+            "target={target}\narchive=\n{mapping}\n[ -n \"$archive\" ] || exit 3\nprintf '%s' \"$archive\""
+        );
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&probe)
+            .output()
+            .expect("run the installer's mapping");
+        assert!(
+            output.status.success(),
+            "install.sh refuses the target {target}, which the release publishes: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "install.sh maps {target} to the wrong archive"
+        );
+    }
+}
+
+/// The installer must run on a machine without `shasum`.
+///
+/// `shasum` is macOS-only and `sha256sum` is Linux-only, so an installer that
+/// depends on either fails for half its users. There is a fallback.
+#[test]
+fn the_binary_installer_does_not_depend_on_one_hash_tool() {
+    let dir = integrations();
+    let root = dir.parent().expect("repository root");
+    let text = std::fs::read_to_string(root.join("install.sh")).expect("read install.sh");
+    for tool in ["sha256sum", "shasum", "openssl"] {
+        assert!(
+            text.contains(tool),
+            "install.sh must fall back across hash tools; {tool} is missing"
+        );
+    }
+}
+
+/// A checksum failure must refuse, not warn.
+///
+/// This is the only thing between a user and an arbitrary download, so a
+/// regression that turned it into a warning would be the worst kind.
+#[test]
+fn a_checksum_mismatch_refuses_to_install() {
+    let dir = integrations();
+    let root = dir.parent().expect("repository root");
+    let text = std::fs::read_to_string(root.join("install.sh")).expect("read install.sh");
+    assert!(
+        text.contains("Not installing"),
+        "a mismatched checksum must stop the install explicitly"
+    );
+    assert!(
+        !text.contains("return 0\n  fi\n  echo \"checksum verified"),
+        "the mismatch path must not fall through to success"
+    );
+}
+
+/// An installer that deletes must delete only what it installed.
+///
+/// The integrations installer originally deleted nothing, and a test asserted
+/// that. It then gained an `--uninstall` path, which needs to remove files — so
+/// "no `rm` at all" became the wrong property. What matters is that every
+/// removal is aimed at a path this installer created.
+#[test]
+fn removals_are_aimed_at_installed_paths_only() {
+    let dir = integrations();
+    let path = dir.join("install.sh");
+    let text = std::fs::read_to_string(&path).expect("read installer");
     let code: String = text
         .lines()
         .map(|line| line.split('#').next().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n");
 
-    for pattern in ["rm ", "rmdir", "unlink", "truncate"] {
+    for line in code.lines().filter(|l| l.contains("rm ")) {
+        let targeted = line.contains("witdiff")
+            || line.contains("$1")
+            || line.contains("$path")
+            || line.contains("$work");
         assert!(
-            !code.contains(pattern),
-            "install.sh contains `{pattern}` outside a comment; an installer that \
-             removes or truncates paths can hit the wrong one, and nothing here \
-             needs to"
+            targeted,
+            "{}: this removal is not aimed at an installed path: {line}",
+            path.display()
         );
     }
     assert!(
-        code.contains("cp "),
-        "the installer works by copying, which is what makes it non-destructive"
+        code.contains("rmdir"),
+        "{}: shared directories must be removed with rmdir so a non-empty one is left alone",
+        path.display()
     );
     assert!(
-        text.contains("left alone"),
-        "the installer must report what it declined to overwrite"
+        text.contains("left in place") || text.contains("left alone"),
+        "{}: the installer must say what it declined to remove",
+        path.display()
     );
 }
 

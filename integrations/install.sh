@@ -4,6 +4,7 @@
 #   ./install.sh                     # into the current directory
 #   ./install.sh /path/to/project    # into a specific project
 #   ./install.sh --global            # into ~/.claude, ~/.config/opencode
+#   ./install.sh --uninstall         # remove what this script installed
 #
 # Existing files are never overwritten: a skill you have edited is not something
 # an installer should silently replace. Each skipped file is reported.
@@ -13,12 +14,14 @@ set -eu
 SRC=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 GLOBAL=0
 TARGET=""
+UNINSTALL=0
 
 for arg in "$@"; do
   case "$arg" in
     --global) GLOBAL=1 ;;
+    --uninstall) UNINSTALL=1 ;;
     -h|--help)
-      sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) TARGET="$arg" ;;
@@ -38,6 +41,47 @@ else
   CLAUDE_DIR="${TARGET}/.claude"
   OPENCODE_DIR="${TARGET}/.opencode"
   SCOPE="$TARGET"
+fi
+
+# --- uninstall --------------------------------------------------------------
+# Only files this installer would have written are candidates. A skill you
+# author yourself lives at the same path, so removal is limited to the exact
+# names shipped here and the directories those names created.
+if [ "$UNINSTALL" -eq 1 ]; then
+  removed=0
+  remove_if_present() {
+    if [ -e "$1" ]; then
+      rm -rf "$1"
+      printf '  removed            : %s\n' "$1"
+      removed=$((removed + 1))
+    fi
+  }
+
+  echo "Removing WitDiff agent integrations from ${SCOPE}"
+  echo
+  remove_if_present "$CLAUDE_DIR/skills/witdiff"
+  remove_if_present "$OPENCODE_DIR/plugins/witdiff.ts"
+  remove_if_present "$OPENCODE_DIR/skills/witdiff"
+  if [ "$GLOBAL" -eq 0 ]; then
+    remove_if_present "$TARGET/.cursor/rules/witdiff.mdc"
+  fi
+
+  # Left in place: other plugins and rules may share these directories, and
+  # they are not ours to delete.
+  for dir in "$CLAUDE_DIR/skills" "$OPENCODE_DIR/plugins" "$OPENCODE_DIR/skills" \
+             "$TARGET/.cursor/rules" "$TARGET/.cursor"; do
+    [ -d "$dir" ] && rmdir "$dir" 2>/dev/null || true
+  done
+
+  echo
+  echo "Done: ${removed} removed."
+  if command -v pi >/dev/null 2>&1; then
+    echo
+    echo "Pi keeps its own record. Remove the package with:"
+    echo "  pi remove $SRC/pi"
+    echo "or, if it was installed with --local, edit .pi/settings.json."
+  fi
+  exit 0
 fi
 
 installed=0

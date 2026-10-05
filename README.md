@@ -28,45 +28,88 @@ output, diffs and hashes.
 
 ## Install
 
-Prebuilt binaries for Linux, macOS and Windows (x64 and arm64) are attached to
-each [release](https://github.com/TahsinArafat/WitDiff/releases), with a
-`SHA256SUMS` file.
-
-The current release is an **alpha**, so `/releases/latest/` does not resolve to
-it — GitHub's `latest` deliberately skips prereleases. Pin the tag:
+One command, on Linux, macOS or Windows:
 
 ```bash
-VERSION=1.0.0-alpha.1
-
-# macOS arm64; substitute your platform from the releases page
-curl -fsSLO "https://github.com/TahsinArafat/WitDiff/releases/download/v${VERSION}/witdiff-aarch64-apple-darwin.tar.gz"
-curl -fsSLO "https://github.com/TahsinArafat/WitDiff/releases/download/v${VERSION}/SHA256SUMS"
-shasum -a 256 -c SHA256SUMS --ignore-missing
-tar xzf witdiff-aarch64-apple-darwin.tar.gz -C /usr/local/bin witdiff
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh
 ```
 
-Verify the checksum before running it. Once a full release exists,
-`/releases/latest/` will work and the version variable can be dropped.
+It detects your platform, downloads the matching archive, **verifies it against
+the release's `SHA256SUMS`**, and installs to `~/.local/bin`. If the checksum
+does not match, nothing is installed. It never uses `sudo`; an unwritable
+destination is reported, not escalated.
 
 <details>
-<summary>Other ways to install</summary>
+<summary>Options, other platforms, and manual install</summary>
 
-From source, which needs Rust 1.88 or newer:
+```bash
+./install.sh --version v1.0.0-alpha.1   # pin a release
+./install.sh --to /usr/local/bin        # choose the directory
+./install.sh --uninstall                # remove it
+```
+
+**Windows (PowerShell)** — the installer is a POSIX shell script. Download the
+zip and verify it directly:
+
+```powershell
+$V = "1.0.0-alpha.1"
+$u = "https://github.com/TahsinArafat/WitDiff/releases/download/v$V"
+Invoke-WebRequest "$u/witdiff-x86_64-pc-windows-msvc.zip" -OutFile witdiff.zip
+Invoke-WebRequest "$u/SHA256SUMS" -OutFile SHA256SUMS
+$expected = (Select-String -Path SHA256SUMS -Pattern "witdiff-x86_64-pc-windows-msvc.zip").Line.Split()[0]
+$actual = (Get-FileHash witdiff.zip -Algorithm SHA256).Hash.ToLower()
+if ($expected -ne $actual) { throw "checksum mismatch; not installing" }
+Expand-Archive witdiff.zip -DestinationPath .
+# move witdiff.exe somewhere on your PATH
+```
+
+**From source**, needing Rust 1.88 or newer:
 
 ```bash
 cargo install --git https://github.com/TahsinArafat/WitDiff witdiff
 ```
 
-From a checkout:
+**Every published platform:**
 
-```bash
-cargo install --path crates/witdiff-cli
-```
+| Platform | Archive |
+| --- | --- |
+| Linux x64 | `witdiff-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux arm64 | `witdiff-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `witdiff-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `witdiff-x86_64-pc-windows-msvc.zip` |
 
-Or run the agent-integration installers in [`integrations/`](integrations),
-which set WitDiff up as a skill, plugin or rule for the harness you use.
+Intel macOS is not built — the runner could not be relied on to schedule, and a
+Mac from 2020 onward runs the arm64 binary under Rosetta. See
+[`docs/development.md`](docs/development.md).
 
 </details>
+
+### Wire it into your agent
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh | sh
+```
+
+Detects **Claude Code**, **OpenCode**, **Cursor** and **Pi** and installs the
+matching package into the current project. It never overwrites a file you have
+edited, and it installs nothing you do not have.
+
+```bash
+integrations/install.sh --global      # user config instead of this project
+integrations/install.sh --uninstall   # remove only what it installed
+```
+
+See [`integrations/`](integrations) for what each harness gets.
+
+### Uninstall
+
+```bash
+install.sh --uninstall              # the binary
+integrations/install.sh --uninstall # the agent packages
+```
+
+Both remove only what they installed, and both report what they removed. Files
+you wrote yourself are left alone, even in the same directories.
 
 ## Use
 
