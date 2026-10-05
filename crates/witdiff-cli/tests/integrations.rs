@@ -429,6 +429,149 @@ fn removals_are_aimed_at_installed_paths_only() {
     );
 }
 
+/// The installer must install only the harnesses that are present.
+///
+/// `integrations/README.md` promised this and the script did not do it: it wrote
+/// rules for every harness unconditionally, so a user without Cursor found a
+/// `.cursor/rules/` directory they had to clean up by hand.
+#[test]
+fn the_integrations_installer_copies_only_present_harnesses() {
+    let dir = integrations();
+    let script = std::fs::read_to_string(dir.join("install.sh")).expect("read installer");
+    assert!(
+        script.contains("WITDIFF_INSTALL_ALL"),
+        "there must be a way to force every harness: PATH is not a reliable \
+         signal, since a GUI launcher or an alias is invisible to `command -v`"
+    );
+
+    let project = tempfile::TempDir::new().expect("temp dir");
+    std::fs::create_dir_all(project.path().join(".git")).expect("git dir");
+
+    // Only `opencode` is reachable, so the others must be left alone. The stub
+    // is a real executable on PATH rather than a mock of the check.
+    let bin = project.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("bin dir");
+    let stub = bin.join("opencode");
+    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("write stub");
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("chmod");
+
+    // System tools must stay on PATH: the script needs `dirname` and `mktemp`
+    // before it reaches any harness check, and a PATH of only the stub made it
+    // fail with "dirname: command not found" rather than exercising detection.
+    let path = format!("/usr/bin:/bin:{}", bin.display());
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("sh {} .", dir.join("install.sh").display()))
+        .current_dir(project.path())
+        .env("PATH", &path)
+        .env_remove("WITDIFF_INSTALL_ALL")
+        .output()
+        .expect("run the installer");
+    assert!(
+        output.status.success(),
+        "installer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        project
+            .path()
+            .join(".opencode/skills/witdiff/SKILL.md")
+            .is_file(),
+        "the harness on PATH must be installed"
+    );
+    for absent in [".claude", ".cursor"] {
+        assert!(
+            !project.path().join(absent).exists(),
+            "{absent} was installed for a harness that is not on PATH; the \
+             README says only present harnesses are installed"
+        );
+    }
+}
+
+/// With no harness reachable, install everything rather than nothing.
+///
+/// "Not found" is not evidence of "not used" — a GUI launcher or a shell alias
+/// is invisible to `command -v`. A checker that refuses to install anything is
+/// worse than one that installs too much.
+///
+/// This caught a real disagreement: the fallback set a display string while the
+/// install guards still consulted the PATH check, so the script announced "all
+/// integrations will be installed" and then installed none.
+#[test]
+fn an_empty_path_installs_every_harness() {
+    let dir = integrations();
+    let project = tempfile::TempDir::new().expect("temp dir");
+    std::fs::create_dir_all(project.path().join(".git")).expect("git dir");
+
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("sh {} .", dir.join("install.sh").display()))
+        .current_dir(project.path())
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("WITDIFF_INSTALL_ALL")
+        .output()
+        .expect("run the installer");
+    assert!(output.status.success(), "installer failed");
+
+    for installed in [
+        ".claude/skills/witdiff/SKILL.md",
+        ".opencode/skills/witdiff/SKILL.md",
+        ".cursor/rules/witdiff.mdc",
+    ] {
+        assert!(
+            project.path().join(installed).is_file(),
+            "with nothing on PATH the installer must still install {installed}"
+        );
+    }
+}
+
+/// Uninstall must not be restricted by which harnesses are present.
+///
+/// Detection decides what to install; it must never decide what to remove. A
+/// user uninstalling on a machine where a harness is no longer on PATH would
+/// otherwise be left with files the script refuses to acknowledge.
+#[test]
+fn uninstall_ignores_harness_detection() {
+    let dir = integrations();
+    let script = dir.join("install.sh");
+    let project = tempfile::TempDir::new().expect("temp dir");
+    std::fs::create_dir_all(project.path().join(".git")).expect("git dir");
+
+    let run = |args: &str| {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("sh {} {args}", script.display()))
+            .current_dir(project.path())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .expect("run the installer")
+    };
+
+    // Installed with everything forced, then removed with nothing on PATH.
+    assert!(std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("sh {} .", script.display()))
+        .current_dir(project.path())
+        .env("PATH", "/usr/bin:/bin")
+        .env("WITDIFF_INSTALL_ALL", "1")
+        .output()
+        .expect("install")
+        .status
+        .success());
+    assert!(project
+        .path()
+        .join(".claude/skills/witdiff/SKILL.md")
+        .is_file());
+
+    assert!(run("--uninstall .").status.success(), "uninstall failed");
+    assert!(
+        !project.path().join(".claude/skills/witdiff").exists(),
+        "uninstall left files behind because no harness was on PATH"
+    );
+}
+
 /// Running the integrations installer through a pipe must actually install.
 ///
 /// This was broken: `$0` is the interpreter (`sh`) when a script is piped into a
@@ -458,6 +601,7 @@ fn the_integrations_installer_installs_when_piped() {
         .arg("-s")
         .current_dir(project.path())
         .env("WITDIFF_INSTALL_DIR", dir.display().to_string())
+        .env("WITDIFF_INSTALL_ALL", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -479,8 +623,9 @@ fn the_integrations_installer_installs_when_piped() {
         "the piped installer must exit 0; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // The three files a project install produces. If the packages were not
-    // found, the script reports "0 installed" and none of these exist.
+    // Which files appear depends on which harnesses are on PATH, so the check
+    // is that *something* was installed rather than a fixed set: forcing
+    // WITDIFF_INSTALL_ALL makes the set deterministic.
     for installed in [
         ".claude/skills/witdiff/SKILL.md",
         ".opencode/plugins/witdiff.ts",

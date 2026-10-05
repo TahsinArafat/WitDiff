@@ -60,7 +60,16 @@ $expected = (Select-String -Path SHA256SUMS -Pattern "witdiff-x86_64-pc-windows-
 $actual = (Get-FileHash witdiff.zip -Algorithm SHA256).Hash.ToLower()
 if ($expected -ne $actual) { throw "checksum mismatch; not installing" }
 Expand-Archive witdiff.zip -DestinationPath .
-# move witdiff.exe somewhere on your PATH
+
+# Install it somewhere on your PATH, and make that permanent.
+$dest = "$env:LOCALAPPDATA\Programs\witdiff"
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+Move-Item -Force witdiff.exe "$dest\witdiff.exe"
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$dest*") {
+    [Environment]::SetEnvironmentVariable("Path", "$userPath;$dest", "User")
+}
+Write-Host "Installed to $dest. Restart your terminal, then run: witdiff doctor"
 ```
 
 **From source**, needing Rust 1.88 or newer:
@@ -90,16 +99,18 @@ Mac from 2020 onward runs the arm64 binary under Rosetta. See
 curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh | sh
 ```
 
-Detects **Claude Code**, **OpenCode**, **Cursor** and **Pi** and installs the
-matching package into the current project. It never overwrites a file you have
-edited, and it installs nothing you do not have.
+Installs the package for whichever harnesses it finds on your `PATH` — **Claude
+Code**, **OpenCode**, **Cursor**, **Pi** — into the current project. If it finds
+none it installs all of them, because "not on my `PATH`" is not the same as "not
+used"; `WITDIFF_INSTALL_ALL=1` forces every one.
 
 ```bash
 integrations/install.sh --global      # user config instead of this project
 integrations/install.sh --uninstall   # remove only what it installed
 ```
 
-See [`integrations/`](integrations) for what each harness gets.
+It never overwrites a file you have edited, and it installs nothing you do not
+have. See [`integrations/`](integrations) for what each harness gets.
 
 ### Uninstall
 

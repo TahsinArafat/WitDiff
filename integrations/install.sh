@@ -160,36 +160,84 @@ copy_tree() {
   done
 }
 
+# Which harnesses are present. A harness that is absent gets nothing: writing
+# rules for an editor nobody has is clutter in a directory the user will
+# eventually have to clean up by hand.
+#
+# The override exists because "not on PATH" is not the same as "not used" —
+# a GUI-application wrapper, an alias, or a harness launched from elsewhere all
+# fail a PATH check. `WITDIFF_INSTALL_ALL=1` installs everything.
+have() {
+  [ "${WITDIFF_INSTALL_ALL:-0}" = "1" ] && return 0
+  command -v "$1" >/dev/null 2>&1
+}
+
+selected=""
+for candidate in claude opencode cursor pi; do
+  if have "$candidate"; then selected="$selected $candidate"; fi
+done
+
+# Nothing found is not evidence of absence, so every harness is selected rather
+# than none: a user who ran this clearly wants the integration, and a checker
+# that installs nothing is worse than one that installs too much.
+#
+# `WITDIFF_ALL` is what the install guards consult. An earlier version set a
+# display string here while the guards still called `have`, so it announced
+# "all integrations will be installed" and then installed none — the two
+# disagreed, and the message made it look deliberate.
+if [ -z "$selected" ]; then
+  WITDIFF_ALL=1
+  echo "No agent CLI found on PATH, so all integrations will be installed."
+  echo "To install only one, put that harness on your PATH."
+  echo
+fi
+
+# Whether a harness is included, from the single decision made above.
+wanted() {
+  [ "${WITDIFF_ALL:-0}" = "1" ] && return 0
+  case " $selected " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+echo "Harnesses:${selected:- all}"
+echo
+
 echo "Installing WitDiff agent integrations into ${SCOPE}"
 echo
 
-echo "Claude Code (.claude/skills/)"
-copy_tree "$SRC/claude/skills" "$CLAUDE_DIR/skills"
-
-echo
-echo "OpenCode (.opencode/)"
-copy_tree "$SRC/opencode/plugins" "$OPENCODE_DIR/plugins"
-copy_tree "$SRC/opencode/skills" "$OPENCODE_DIR/skills"
-
-echo
-echo "Cursor (.cursor/rules/)"
-if [ "$GLOBAL" -eq 1 ]; then
-  echo "  cursor rules are per-project; skipped in --global mode"
-else
-  copy_tree "$SRC/cursor/rules" "$TARGET/.cursor/rules"
+if wanted claude; then
+  echo "Claude Code (.claude/skills/)"
+  copy_tree "$SRC/claude/skills" "$CLAUDE_DIR/skills"
+  echo
 fi
 
-echo
-echo "Pi"
-if command -v pi >/dev/null 2>&1; then
-  # An absolute path is used because `pi install --local` records the source
-  # relative to the settings file it writes, and a relative path that escapes
-  # the project becomes a chain of `../` that breaks if either directory moves.
-  # When the packages were downloaded, the local path is a temporary directory
+if wanted opencode; then
+  echo "OpenCode (.opencode/)"
+  copy_tree "$SRC/opencode/plugins" "$OPENCODE_DIR/plugins"
+  copy_tree "$SRC/opencode/skills" "$OPENCODE_DIR/skills"
+  echo
+fi
+
+if wanted cursor; then
+  echo "Cursor (.cursor/rules/)"
+  if [ "$GLOBAL" -eq 1 ]; then
+    echo "  cursor rules are per-project; skipped in --global mode"
+  else
+    copy_tree "$SRC/cursor/rules" "$TARGET/.cursor/rules"
+  fi
+  echo
+fi
+
+if wanted pi; then
+  echo "Pi"
+  # When the packages were downloaded, a local path is a temporary directory
   # this script deletes on exit. Pi records the source it is given, so a path
   # into that directory resolves to nothing the moment the trap fires —
   # observed: `pi install` succeeded and the recorded path was already gone.
-  # A git source is stable and needs no local copy.
+  # A git source is stable and needs no local copy. Otherwise the checkout is
+  # used by absolute path, because `pi install --local` records the source
+  # relative to the settings file and a path escaping the project becomes a
+  # chain of `../` that breaks when either directory moves.
   if [ -n "$FETCHED" ]; then
     PI_SOURCE="git:github.com/${REPO}@${BRANCH}"
   else
@@ -202,9 +250,7 @@ if command -v pi >/dev/null 2>&1; then
     (cd "$TARGET" && pi install "$PI_SOURCE" --local) || echo "  pi install failed; see its message above"
   fi
   echo "  note: pi records this source in settings; re-run after moving a local checkout"
-else
-  echo "  pi not found on PATH; install it, then run:"
-  echo "    pi install git:github.com/${REPO}@${BRANCH}"
+  echo
 fi
 
 echo
