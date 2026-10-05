@@ -993,3 +993,230 @@ fn javascript_reaches_verified_end_to_end() {
     let receipt = project.verify(&javascript_config());
     assert_red_green_proven(&receipt, "javascript");
 }
+
+// ---------------------------------------------------------------------------
+// PHP / PHPUnit
+// ---------------------------------------------------------------------------
+
+fn php_config() -> Config {
+    let mut config = config_for(
+        "phpunit",
+        &["php", "vendor/bin/phpunit"],
+        &["tests/**/*Test.php", "**/*Test.php"],
+        &["tests"],
+    );
+    // The dependency directory is gitignored, so the base worktree cannot see
+    // it. This is the setting that closes that gap; without it the base control
+    // run fails to start and the receipt blames the base.
+    config.verification.base_dependency_dirs = vec!["vendor".to_owned()];
+    config
+}
+
+const PHP_BUGGY: &str = "<?php\nnamespace App;\nclass Calc { public function add(int $a, int $b): int { return $a - $b; } }\n";
+const PHP_FIXED: &str = "<?php\nnamespace App;\nclass Calc { public function add(int $a, int $b): int { return $a + $b; } }\n";
+const PHP_EXISTING: &str = "<?php\nnamespace Tests;\nrequire_once __DIR__ . '/../src/Calc.php';\nuse PHPUnit\\Framework\\TestCase;\nclass ExistingTest extends TestCase {\n    public function testArithmetic(): void { $this->assertEquals(2, 1 + 1); }\n}\n";
+const PHP_CREDIBLE: &str = "<?php\nnamespace Tests;\nrequire_once __DIR__ . '/../src/Calc.php';\nuse App\\Calc;\nuse PHPUnit\\Framework\\TestCase;\nclass CalcTest extends TestCase {\n    public function testAdd(): void { $this->assertEquals(5, (new Calc())->add(2, 3)); }\n}\n";
+const PHP_VACUOUS: &str = "<?php\nnamespace Tests;\nrequire_once __DIR__ . '/../src/Calc.php';\nuse App\\Calc;\nuse PHPUnit\\Framework\\TestCase;\nclass CalcTest extends TestCase {\n    public function testAdd(): void { $calc = new Calc(); $this->assertEquals($calc->add(2, 3), $calc->add(2, 3)); }\n}\n";
+
+/// Give the fixture a real PHPUnit, since the base worktree needs it too.
+///
+/// Located rather than vendored: building a Composer project per test would
+/// dominate the runtime, and a stub would prove the stub instead of the tool.
+fn phpunit_available() -> Option<std::path::PathBuf> {
+    // A vendor directory: the fixture copies it wholesale, because PHPUnit's
+    // autoloader is only valid beside the packages it indexes.
+    if let Ok(path) = std::env::var("WITDIFF_PHPUNIT_VENDOR") {
+        let path = std::path::PathBuf::from(path);
+        if path.join("autoload.php").is_file() {
+            return Some(path);
+        }
+    }
+    // A Composer project installed anywhere on this machine is enough: PHPUnit
+    // is invoked by absolute path and needs no autoloading for these fixtures,
+    // which declare their own classes.
+    for candidate in ["/tmp/phpunitfx/vendor", "/tmp/pestfx/vendor"] {
+        let path = std::path::PathBuf::from(candidate);
+        if path.join("autoload.php").is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Install the dependency directory the base worktree will need.
+///
+/// The whole `vendor/` tree is copied, because PHPUnit loads a Composer
+/// autoloader that is only valid alongside the packages it indexes. Copying the
+/// entry point alone leaves it unable to find its own classes — the fixture
+/// then fails for a reason unrelated to what is under test.
+fn install_vendor(root: &Path, vendor: &Path) -> bool {
+    fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(target)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let from = entry.path();
+            let to = target.join(entry.file_name());
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                copy_tree(&from, &to)?;
+            } else if kind.is_symlink() {
+                let link = fs::read_link(&from)?;
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&link, &to)?;
+            } else {
+                fs::copy(&from, &to)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = fs::metadata(&from)?.permissions().mode();
+                    let _ = fs::set_permissions(&to, fs::Permissions::from_mode(mode));
+                }
+            }
+        }
+        Ok(())
+    }
+    let target = root.join("vendor");
+    if target.exists() {
+        return true;
+    }
+    copy_tree(vendor, &target).is_ok()
+}
+
+/// A PHP fixture needs `phpunit.xml` and a `vendor/bin/phpunit` entry point,
+/// because the configured command names that path.
+fn php_project(files: &[(&str, &str)]) -> Project {
+    let mut all: Vec<(&str, &str)> = vec![
+        (
+            "phpunit.xml",
+            "<?xml version=\"1.0\"?><phpunit colors=\"false\"><testsuites><testsuite name=\"all\"><directory>tests</directory></testsuite></testsuites></phpunit>",
+        ),
+        (".gitignore", "vendor/\n.witdiff/\n.phpunit.result.cache\n"),
+    ];
+    all.extend_from_slice(files);
+    Project::new(&all)
+}
+
+#[test]
+#[ignore = "end-to-end: spawns PHP and a real PHPUnit; run with -- --ignored"]
+fn php_reaches_verified_end_to_end() {
+    if !program_available("php", &["-v"]) {
+        eprintln!("php absent; skipping");
+        return;
+    }
+    let Some(phpunit) = phpunit_available() else {
+        eprintln!("no PHPUnit found; set WITDIFF_PHPUNIT; skipping");
+        return;
+    };
+
+    let project = php_project(&[
+        ("src/Calc.php", PHP_BUGGY),
+        ("tests/ExistingTest.php", PHP_EXISTING),
+    ]);
+    project.commit_base("buggy base");
+    assert!(install_vendor(&project.root, &phpunit), "install vendor");
+
+    project.write("src/Calc.php", PHP_FIXED);
+    project.write("tests/CalcTest.php", PHP_CREDIBLE);
+
+    let receipt = project.verify(&php_config());
+    if receipt.status != VerificationStatus::Verified {
+        panic!(
+            "php: expected Verified, got {:?}; head_run={:?} stderr={}",
+            receipt.status,
+            (receipt.head_run.success, receipt.head_run.exit_code),
+            receipt.head_run.stderr
+        );
+    }
+    assert_red_green_proven(&receipt, "php");
+}
+
+/// The case plain PHPUnit accepts: green under `phpunit`, but the test passes
+/// on the base revision too, so it proves nothing.
+#[test]
+#[ignore = "end-to-end: spawns PHP and a real PHPUnit; run with -- --ignored"]
+fn a_phpunit_test_that_also_passes_on_base_is_not_verified() {
+    if !program_available("php", &["-v"]) {
+        eprintln!("php absent; skipping");
+        return;
+    }
+    let Some(phpunit) = phpunit_available() else {
+        eprintln!("no PHPUnit found; set WITDIFF_PHPUNIT; skipping");
+        return;
+    };
+
+    let project = php_project(&[
+        ("src/Calc.php", PHP_BUGGY),
+        ("tests/ExistingTest.php", PHP_EXISTING),
+    ]);
+    project.commit_base("buggy base");
+    assert!(install_vendor(&project.root, &phpunit), "install vendor");
+
+    project.write("src/Calc.php", PHP_FIXED);
+    // `add(x, y) == add(x, y)` holds under any implementation.
+    project.write("tests/CalcTest.php", PHP_VACUOUS);
+
+    let receipt = project.verify(&php_config());
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::NotVerified,
+        "a test that passes on base cannot be a regression proof; notes={:?}",
+        receipt.notes
+    );
+    assert!(!receipt.red_green_proven, "red/green must not be claimed");
+}
+
+/// The dependency directory is gitignored, so `git worktree` does not have it.
+/// With `base_dependency_dirs` configured the base experiment can start; the
+/// assertion is on the base run, because "could not start" and "genuinely
+/// failed" must not be conflated.
+#[test]
+#[ignore = "end-to-end: spawns PHP and a real PHPUnit; run with -- --ignored"]
+fn a_gitignored_dependency_directory_does_not_break_the_base_control() {
+    if !program_available("php", &["-v"]) {
+        eprintln!("php absent; skipping");
+        return;
+    }
+    let Some(phpunit) = phpunit_available() else {
+        eprintln!("no PHPUnit found; set WITDIFF_PHPUNIT; skipping");
+        return;
+    };
+
+    let project = php_project(&[
+        ("src/Calc.php", PHP_BUGGY),
+        ("tests/ExistingTest.php", PHP_EXISTING),
+    ]);
+    project.commit_base("buggy base");
+    assert!(install_vendor(&project.root, &phpunit), "install vendor");
+
+    project.write("src/Calc.php", PHP_FIXED);
+    project.write("tests/CalcTest.php", PHP_CREDIBLE);
+
+    let receipt = project.verify(&php_config());
+    let control = receipt
+        .base_control_run
+        .as_ref()
+        .expect("the base control must have run");
+    assert!(
+        control.success,
+        "the base control must start and pass; stderr={}",
+        control.stderr
+    );
+    assert!(
+        receipt
+            .notes
+            .iter()
+            .any(|note| note.contains("copied into")),
+        "the receipt must say the dependencies were reused; notes={:?}",
+        receipt.notes
+    );
+
+    // And the setting is what made it work: without it, the base cannot start.
+    let mut without = php_config();
+    without.verification.base_dependency_dirs.clear();
+    let bare = project.verify(&without);
+    let bare_control = bare.base_control_run.as_ref().expect("control ran");
+    assert!(
+        !bare_control.success,
+        "without the setting the base worktree has no vendor/ and must fail"
+    );
+}
