@@ -76,10 +76,31 @@ impl JavaToolchain {
         if !is_java {
             return None;
         }
-        Some(Self {
+        Some(Self::new(working_directory))
+    }
+
+    /// A Java project identified by its test files rather than by its command.
+    ///
+    /// A repository whose tests are `src/test/**/*Test.java` is a Java project
+    /// however it runs them, and a command that runs a committed wrapper script
+    /// names no JDK at all. Deriving the toolchain only from the command meant
+    /// such a project lost structural analysis while its red/green proof still
+    /// held, which is why Java reached `VerifiedWithWarnings` and never
+    /// `Verified`.
+    ///
+    /// The analyzer itself needs only `java` — it compiles the summary tool in
+    /// memory with single-file source launch — so no build tool is required to
+    /// be present for analysis to run.
+    pub fn new(working_directory: &Path) -> Self {
+        Self {
             program: "java".to_owned(),
             working_directory: working_directory.to_owned(),
-        })
+        }
+    }
+
+    /// Whether a set of changed test files proves this is a Java project.
+    pub fn is_java_test_file(path: &str) -> bool {
+        path.ends_with(".java")
     }
 
     /// Summarize one Java file.

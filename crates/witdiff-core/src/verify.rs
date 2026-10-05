@@ -849,10 +849,24 @@ fn collect_integrity(
     );
     // Java too (ADR-0018). The JDK ships a parser, so a project that can
     // compile its tests can analyze them.
+    //
+    // The command is not the only evidence a project is Java. A repository
+    // that runs `./mvnw test` through a committed wrapper names no JDK, and
+    // one that runs a shell script names no build tool at all — both were
+    // reported as having no toolchain, so structural analysis was skipped
+    // while the red/green proof held, which is why Java could never reach
+    // `Verified`. The changed test files say what the project *is*.
     let java_toolchain = crate::javaanalysis::JavaToolchain::from_test_command(
         &config.verification.test_command,
         repo.root(),
-    );
+    )
+    .or_else(|| {
+        let is_java = inspect
+            .changed_test_files
+            .iter()
+            .any(|path| crate::javaanalysis::JavaToolchain::is_java_test_file(path));
+        is_java.then(|| crate::javaanalysis::JavaToolchain::new(repo.root()))
+    });
     // Ruby too (ADR-0020). `ripper` ships with the interpreter, so a project
     // that can run its tests can analyze them.
     let ruby_toolchain = crate::rubyanalysis::RubyToolchain::from_test_command(

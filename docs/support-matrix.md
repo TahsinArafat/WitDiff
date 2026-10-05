@@ -346,22 +346,22 @@ against the real tool, and each found real bugs.
 ### What remains
 
 **Red/green proof is end to end for all five supported languages.** Each reaches
-a proof against a real temporary repository with a real toolchain: `Verified`
-for pytest, Go, Ruby and JavaScript, and `VerifiedWithWarnings` for Java — see
-below for why Java is one notch lower.
+a proof against a real temporary repository with a real toolchain, and each
+reaches `Verified`.
 
 Python additionally has negative tests: a test that passes on the base is
 reported `not_verified`, and a gutted assertion is caught rather than accepted.
 The others have the positive path only.
 
-**Java proves red/green but loses structural analysis.** Its red/green chain is
-verified against a real JUnit 5 platform, so the failure classification and the
-transplant are proven. The status is `VerifiedWithWarnings` rather than
-`Verified` for one reason: when the configured test command is a script rather
-than `java`/`mvn`/`gradle`, `JavaToolchain::from_test_command` cannot derive a
-toolchain, so the structural comparison does not run and the receipt says so
-with a `test_source_unparsable` finding. Fewer findings, never wrong ones — but
-a real limitation, and a wrapper script is common in CI.
+**Java is proven against a real JUnit 5 platform**, including its failure
+classification and the transplant. The toolchain is derived from the changed
+`.java` test files as well as from the configured command, because a project
+whose tests run through a committed wrapper script names no JDK at all — that
+case previously cost structural analysis while the red/green proof still held,
+which is why Java could reach `VerifiedWithWarnings` but never `Verified`. Both
+halves are tested: a script-shaped command now yields `Verified`, and gutting an
+existing assertion while adding a credible regression test produces a
+`trivial_assertion` finding from the structural comparison.
 
 **A shared cargo target directory breaks a second run.** The two workspaces are
 the same crate written by two revisions, so they write the same output path.

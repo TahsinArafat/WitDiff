@@ -115,11 +115,12 @@ Read `docs/roadmap.md`. High-value tasks currently are:
    - the Java fixture needs a JUnit 5 runtime, and a JUnit classpath whose
      versions agree. Mixed versions print `0 tests found` and exit 0.
 
-2. **Java reaches `VerifiedWithWarnings`, not `Verified`.** Its red/green chain
-   is proven end to end against a real JUnit 5 platform, but a script-shaped
-   test command gives `JavaToolchain::from_test_command` nothing to work from, so
-   structural analysis is skipped and reported. Teaching the Java analyzer to
-   recognise a wrapper script would close the last notch.
+2. **Java now reaches `Verified` like the others.** Its red/green chain is
+   proven end to end against a real JUnit 5 platform, and the toolchain is
+   derived from the changed `.java` test files as well as from the configured
+   command — so a project running a committed wrapper script no longer loses
+   structural analysis. Both halves are tested: the status, and a gutted
+   assertion producing a `trivial_assertion` finding.
 
    The Java fixture also found something worth remembering: **mixing JUnit
    platform versions fails silently.** A `1.14.4` platform with a `6.0.1` Jupiter

@@ -116,13 +116,17 @@ records why. The receipt states which variant produced the evidence via
 
 Status: mostly done in 1.0. Shipped as `witdiff_core::rustanalysis`, producing
 `removed_assertion`, `weakened_assertion`, `changed_expected_value`,
-`removed_test`, `trivial_assertion`, `ignored_test`, `added_should_panic`,
+`removed_test`, `trivial_assertion`, `ignored_test`, `skipped_test`,
+`removed_error_check`, `removed_match_arm`, `added_should_panic`,
 `test_source_unparsable`, and the informational `unignored_test` /
 `empty_test_body`. Every finding carries a rule ID and a line number.
 
+`removed_error_check` shipped as a rule distinct from `removed_assertion`: a
+`raise` or `flunk` inside a conditional fails the test without an assertion
+macro, so deleting one is invisible to the assertion rules.
+
 Still open from the original list:
 
-- removed error checks (a distinct rule from removed assertions);
 - mock substitution around changed behavior.
 
 Simple bindings are resolved, so a rebound subject is no longer reported as a
@@ -188,13 +192,16 @@ Still open:
 
 - targeted invocation for non-Rust frameworks, so a narrowed run is possible
   where the framework supports it;
-- structure-aware test-integrity analysis for JavaScript, which now exists for
-  Rust (ADR-0006), Python (ADR-0016) and Go (ADR-0017). JavaScript needs its own
-  decision because Node ships no parser, unlike the other three runtimes;
 - mutation operators (ADR-0011) for other languages.
 
 Until those exist, a non-Rust repository gets a red/green proof and a
 line-oriented integrity fallback rather than structural analysis.
+
+JavaScript needs its own parser, unlike the other three runtimes, because Node
+ships none. That was decided rather than deferred: ADR-0021 requires the
+parser from the project under verification and reports the file as not analyzed
+when there is none, and it is now verified against a real `acorn` and a real
+`typescript` rather than against hand-written ASTs.
 
 ## P5 — integrations
 

@@ -123,7 +123,7 @@ the key; WitDiff never creates or stores one.
 
 ## M6 — advanced evidence
 
-- [x] coverage of changed branches as evidence (not as sole proof)
+- [x] coverage of changed lines as evidence (not as sole proof)
 - [x] dependency/version/environment fingerprint
 - [x] sandboxed verification runner
 - [x] provenance chain across multiple verification stages
@@ -140,7 +140,15 @@ Shipped so far in M6:
   repository states it once rather than restating flags on every invocation.
   Flags may only tighten it.
 - **Coverage of changed lines** — the receipt reports how many of the lines this
-  change added the tests executed, with per-file detail. Counts added lines from
+  change added the tests executed, with per-file detail.
+
+  This item originally said *changed branches*. Measured: on the stable
+  toolchain this workspace pins, `cargo llvm-cov --json` reports
+  `branches: {count: 0}` for a file with an if/else, and `--branch` fails
+  outright — branch instrumentation needs `-Zbranch-coverage`, which is nightly.
+  The wording is corrected to match what a stable toolchain can produce rather
+  than left claiming something the receipt cannot carry. Branch coverage
+  returns if the project ever moves to nightly, and the report has room for it. Counts added lines from
   a `-U0` patch rather than whole files, is a separate opt-in run, and never
   touches the verdict.
 - **Provenance chain** — `.witdiff/provenance.json` links each receipt's digest

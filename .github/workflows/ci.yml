@@ -43,6 +43,16 @@ jobs:
       - name: Install pytest
         run: python3 -m pip install --quiet pytest
 
+      # The coverage tests measure coverage of changed lines with the real
+      # tool. Without this they skip, which is the same trap the ignored suite
+      # was in before toolchains were wired in: a green run that exercised
+      # nothing. `llvm-tools-preview` provides `llvm-cov` and `llvm-profdata`;
+      # cargo-llvm-cov drives them.
+      - name: Install the coverage toolchain
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -54,6 +64,11 @@ jobs:
       # runners are `#[ignore]`d so a plain `cargo test` stays fast and offline.
       # Running them here is what stops that work from silently rotting: a
       # change that breaks the JavaScript or Ruby analyzer cannot merge.
+      #
+      # This step depends on the toolchain installs above, including the
+      # coverage toolchain: a coverage test that cannot find `cargo-llvm-cov`
+      # skips rather than fails, and a skipped test looks exactly like a passing
+      # one.
       #
       # `--test-threads=1` because several fixtures write into a shared
       # temporary tool directory.

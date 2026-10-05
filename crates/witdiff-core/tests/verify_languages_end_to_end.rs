@@ -688,15 +688,14 @@ fn java_reaches_verified_end_to_end() {
 
     let receipt =
         project.verify_with_env(&java_config(), &[("WITDIFF_JUNIT_CP", classpath.as_str())]);
-    // The red/green proof is established. The status is
-    // `VerifiedWithWarnings` rather than `Verified` because the configured
-    // command is a script, so the analyzer cannot derive a Java toolchain and
-    // reports that structural analysis was not performed. That is the correct
-    // conservative outcome: fewer findings, never wrong ones.
+    // The red/green proof holds, and — unlike before — the configured command
+    // being a wrapper script no longer costs structural analysis. The toolchain
+    // is derived from the changed test files when the command names no JDK, so
+    // Java reaches `Verified` rather than `VerifiedWithWarnings`.
     assert_eq!(
         receipt.status,
-        VerificationStatus::VerifiedWithWarnings,
-        "java: expected VerifiedWithWarnings, got {:?}; notes={:?}",
+        VerificationStatus::Verified,
+        "java: expected Verified, got {:?}; notes={:?}",
         receipt.status,
         receipt.notes
     );
@@ -705,28 +704,99 @@ fn java_reaches_verified_end_to_end() {
     assert_eq!(
         base.failure_kind,
         Some(FailureKind::TestFailure),
-        "java: the base failure must be a behavioural test failure, not a \
+        "the base failure must be a behavioural test failure, not a \
          compile error; stdout={:?} stderr={:?}",
         base.stdout,
         base.stderr
     );
 
-    // A wrapper script rather than `java`/`mvn`/`gradle` means the analyzer
-    // cannot derive a toolchain, so structural analysis is unavailable. That is
-    // reported rather than passed over, which is the conservative direction,
-    // but it is a real limitation and the receipt says so.
-    let unparsed = receipt
-        .integrity_findings
-        .iter()
-        .find(|f| f.rule == "test_source_unparsable")
-        .expect("a script command loses structural analysis, and must say so");
+    // The finding that used to appear is the proof the fix landed: it is
+    // emitted whenever no toolchain could be derived, so its absence means the
+    // changed `.java` files were recognized as the evidence they are.
     assert!(
-        unparsed.message.contains("could not be determined"),
-        "the note should name the cause, got {}",
-        unparsed.message
+        !receipt
+            .integrity_findings
+            .iter()
+            .any(|finding| finding.rule == "test_source_unparsable"),
+        "structural analysis must run under a wrapper-script command, got {:?}",
+        receipt
+            .integrity_findings
+            .iter()
+            .map(|finding| (finding.rule.as_str(), finding.message.clone()))
+            .collect::<Vec<_>>()
     );
 }
 
+/// Structural analysis must actually run, not merely stop reporting that it
+/// did not.
+///
+/// The previous test proves a toolchain was derived — `test_source_unparsable`
+/// is emitted precisely when none could be — but "the toolchain exists" and
+/// "the analysis compared something" are different claims. Here an existing
+/// assertion is gutted while a real regression test keeps the proof intact, so
+/// a finding must come from the structural comparison.
+///
+/// Both claims matter because the failure they covered was silent: a project
+/// whose tests run through a committed wrapper script kept its red/green proof
+/// and lost every test-weakening rule at the same time, with the receipt
+/// reporting only that analysis was skipped.
+#[test]
+#[ignore = "end-to-end: spawns the JDK and a real JUnit; run with -- --ignored"]
+fn java_structural_analysis_runs_under_a_wrapper_script_command() {
+    if !program_available("javac", &["-version"]) || !program_available("java", &["-version"]) {
+        eprintln!("JDK absent; skipping");
+        return;
+    }
+    let Some(classpath) = junit_classpath() else {
+        eprintln!("no JUnit 5 runtime found; skipping");
+        return;
+    };
+
+    let project = Project::new(&[
+        (".gitignore", "out/\n"),
+        ("src/Calc.java", JAVA_FIXED),
+        (
+            "src/test/CalcTest.java",
+            "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\npublic class CalcTest {\n    @Test\n    public void addsTwoAndZero() {\n        assertEquals(2, Calc.add(2, 0), \"two and zero\");\n    }\n}\n",
+        ),
+        ("src/test/RunTests.java", JAVA_LAUNCHER),
+        ("run_tests.sh", JAVA_RUNNER),
+    ]);
+    fs::set_permissions(
+        project.root.join("run_tests.sh"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("make runner executable");
+    project.commit_base("buggy base");
+
+    // Keep the proof credible with a new regression test, and gut the existing
+    // one so the structural comparison has something to report.
+    project.write("src/Calc.java", JAVA_BUGGY);
+    project.write(
+        "src/test/CalcTest.java",
+        "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\npublic class CalcTest {\n    @Test\n    public void addsTwoAndZero() {\n        assertTrue(true);\n    }\n}\n",
+    );
+    project.write("src/test/RegressionTest.java", JAVA_TEST);
+
+    let receipt =
+        project.verify_with_env(&java_config(), &[("WITDIFF_JUNIT_CP", classpath.as_str())]);
+
+    let rules: Vec<&str> = receipt
+        .integrity_findings
+        .iter()
+        .map(|finding| finding.rule.as_str())
+        .collect();
+    assert!(
+        !rules.contains(&"test_source_unparsable"),
+        "the toolchain must be derived from the changed .java files, got {rules:?}"
+    );
+    assert!(
+        rules.contains(&"trivial_assertion") || rules.contains(&"weakened_assertion"),
+        "an assertion gutted to `assertTrue(true)` must be reported by structural analysis, \\
+         got {rules:?} with notes {:?}",
+        receipt.notes
+    );
+}
 // ---------------------------------------------------------------------------
 // Ruby / RSpec
 // ---------------------------------------------------------------------------

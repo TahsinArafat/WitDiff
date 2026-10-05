@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Java reached `VerifiedWithWarnings` and could never reach `Verified`.**
+  The toolchain was derived only from the configured test command, so a project
+  whose tests run through a committed wrapper script named no JDK at all: the
+  red/green proof held, structural analysis was skipped, and the receipt only
+  said analysis was unavailable. A test file ending in `.java` is now evidence
+  of a Java project too.
+
+  Both halves are tested, because they are different claims: a script-shaped
+  command now yields `Verified`, and gutting an existing assertion while adding
+  a credible regression test produces a `trivial_assertion` finding from the
+  structural comparison rather than merely stopping the skip notice.
+
+- **A run whose only movement was build output lost its proof.** Freshness was
+  `before == after` on the raw fingerprint while `is_build_output` only formatted
+  a message, so the receipt would call those paths irrelevant to the
+  verification and fail the gate for them in the same sentence. The downgrade
+  also ran unconditionally, so even a classification that said "only a build"
+  was erased afterwards. CI caught this: the `pytest` proof failed on
+  `__pycache__` written by Python 3.12 and passed on 3.9 locally.
+
+- **`cargo-llvm-cov` is installed in CI.** Without it the coverage tests skip,
+  which is the same trap the ignored suite was in before toolchains were wired
+  in — a green run that exercised nothing.
+
 ### Added
 
 - **End-to-end red/green proof for pytest, Go, Ruby/RSpec and JavaScript.**
