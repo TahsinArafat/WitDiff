@@ -116,11 +116,21 @@ impl TestFramework {
         // A framework's test-failure marker is checked before any compile
         // marker, because a run can print both (a compile error inside a test
         // file is still reported by pytest as a collection error).
-        if self.is_test_failure(&lower) {
-            return FailureKind::TestFailure;
-        }
+        // A compile failure is checked FIRST for Ruby, the reverse of every other
+        // framework.
+        //
+        // Measured against real RSpec: a file that fails to load prints
+        // `0 examples, 0 failures, 1 error occurred outside of examples` — a
+        // non-zero *error* count on the summary line. Checking the test-failure
+        // markers first therefore claimed it as a behavioural failure, and a
+        // suite that never loaded was reported as evidence that the code
+        // behaves differently. The `LoadError` itself is in the output, but it
+        // was never consulted.
         if self.is_compile_failure(&lower) {
             return FailureKind::CompileError;
+        }
+        if self.is_test_failure(&lower) {
+            return FailureKind::TestFailure;
         }
 
         // Some frameworks signal failure only through the exit code and a
@@ -269,8 +279,18 @@ fn has_ruby_failure_count(lower: &str) -> bool {
         let trimmed = line.trim();
         // The summary line contains a count of runs or examples and at least
         // one of the outcome counts.
+        //
+        // Both the singular and the plural are matched. Measured against real
+        // RSpec: a one-example suite prints `1 example, 1 failure`, and the
+        // previous plural-only test skipped it, so an ordinary red suite was
+        // classified as an unrecognized command failure — which cannot produce
+        // a proof, so every single-example Ruby suite lost its red/green
+        // evidence. Minitest has the same singular `1 run, 1 failures, 0
+        // errors` shape.
         if !(trimmed.contains(" runs,")
+            || trimmed.contains(" run,")
             || trimmed.contains(" examples,")
+            || trimmed.contains(" example,")
             || trimmed.starts_with("failures:"))
         {
             continue;

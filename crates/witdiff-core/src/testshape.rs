@@ -402,7 +402,17 @@ fn weakening_findings(
     findings
 }
 
-/// The expected side of an exact assertion, as written.
+/// The comparison side of an exact assertion, as written.
+///
+/// The operator is included, not just the right-hand side. Returning only the
+/// expectation made `x Eq 1` and `x NotEq 1` compare equal, so inverting an
+/// assertion while keeping its value produced no finding — an inverted
+/// assertion passes for the wrong reason, which is what the rules exist to
+/// catch. Found by running the JavaScript analyzer against real acorn.
+///
+/// The operator is still separated from the value so that `f() Eq 4` and
+/// `f() NotEq 4` read as one change rather than two, which keeps the message
+/// readable.
 fn expectation_of(normalized: &str, operators: &Operators) -> Option<String> {
     let index = operators
         .comparisons
@@ -415,7 +425,7 @@ fn expectation_of(normalized: &str, operators: &Operators) -> Option<String> {
         .find(|operator| normalized[index..].starts_with(**operator))?;
     let after = &normalized[index + operator.len()..];
     let trimmed = after.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    (!trimmed.is_empty()).then(|| format!("{operator}{trimmed}"))
 }
 
 /// Classify an assertion's strength.
@@ -681,6 +691,43 @@ mod tests {
         assert!(
             findings.is_empty(),
             "strengthening an assertion must produce no findings, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// **Bug found by running the JavaScript analyzer against real acorn.**
+    /// Flipping an assertion's polarity while keeping the same value —
+    /// `expect(x).toBe(1)` becoming `expect(x).not.toBe(1)` — produced no
+    /// finding at all. `expectation_of` returns only the right-hand side, so
+    /// `Eq` and `NotEq` compared equal, and the subject pairing found nothing
+    /// to report.
+    ///
+    /// This matters beyond JavaScript: it is an inverted assertion that passes
+    /// for the wrong reason, which is precisely what the tool exists to catch.
+    /// Rust does not hit it, because its analyzer compares `macro_name` rather
+    /// than an operator string.
+    #[test]
+    fn inverting_an_assertion_is_reported() {
+        let base = summary(vec![function("t", &["x Eq 1"])]);
+        let head = summary(vec![function("t", &["x NotEq 1"])]);
+        let findings = analyze("t.js", "JavaScript", &PYTHON, Some(&base), &head);
+        assert!(
+            rules(&findings).contains(&"changed_expected_value"),
+            "inverting Eq into NotEq must be reported, got {:?}",
+            rules(&findings)
+        );
+    }
+
+    /// The same flip in the other direction, which is the one that would let a
+    /// bug pass: a test that asserted `x != 1` is rewritten to `x == 1`.
+    #[test]
+    fn inverting_an_assertion_back_is_reported() {
+        let base = summary(vec![function("t", &["x NotEq 1"])]);
+        let head = summary(vec![function("t", &["x Eq 1"])]);
+        let findings = analyze("t.js", "JavaScript", &PYTHON, Some(&base), &head);
+        assert!(
+            rules(&findings).contains(&"changed_expected_value"),
+            "inverting NotEq into Eq must be reported, got {:?}",
             rules(&findings)
         );
     }
