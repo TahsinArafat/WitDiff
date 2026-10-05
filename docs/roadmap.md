@@ -124,10 +124,22 @@ the key; WitDiff never creates or stores one.
 ## M6 — advanced evidence
 
 - [ ] coverage of changed branches as evidence (not as sole proof)
-- [ ] dependency/version/environment fingerprint
+- [x] dependency/version/environment fingerprint
 - [ ] sandboxed verification runner
 - [ ] provenance chain across multiple verification stages
-- [ ] policy file for organization-specific gates
+- [x] policy file for organization-specific gates
+
+Shipped so far in M6:
+
+- **Environment evidence** — the receipt records the configured test program, its
+  version, the toolchain that participates in it, and a digest of every
+  dependency manifest present. It answers *where* the evidence came from, which
+  the digest deliberately does not, and it is kept out of the digest so that
+  upgrading Python cannot make an older receipt report itself stale.
+- **Gate policy** — `[gate]` in `witdiff.toml` commits which results pass, so a
+  repository states it once rather than restating flags on every invocation.
+  Flags may only tighten it.
+
 
 ## Explicitly postponed
 

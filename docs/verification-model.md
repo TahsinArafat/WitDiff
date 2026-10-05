@@ -184,6 +184,35 @@ Which statuses pass is deliberately not "everything except `verified`":
 The policy lives in `VerificationStatus::gate`, not in a workflow file, so every
 consumer — CI, an MCP client, a local script — reaches the same verdict.
 
+### Gate policy
+
+Which results count as a pass can be committed to `witdiff.toml` under `[gate]`,
+so a repository states it once instead of restating flags on every invocation:
+
+```toml
+[gate]
+strict = false
+fail_on_no_changed_tests = false
+# require_signature = true
+```
+
+Command-line flags still work, but they may only **tighten** a committed policy.
+Leaving `--strict` off cannot lower a `strict = true` in the file, or every
+developer could quietly undo what CI enforces. The same rule applies to an MCP
+client passing `strict`, which would otherwise be a way around a repository's
+own gate.
+
+`require_signature` is the one requirement about the receipt document rather
+than the verdict, which is why it lives on `Receipt::gate` rather than on the
+status. It applies uniformly, including when there is nothing to prove: a receipt
+is still produced, and an operator who asked for signatures asked for them on
+every receipt.
+
+The policy is deliberately **not** a list of acceptable statuses. An allow-list
+would let a repository write `pass = ["not_verified"]` and defeat the tool by
+configuration. Policy decides how strictly a verdict is judged, never which
+verdicts exist.
+
 ## Rules that fire on legitimate work
 
 Some findings are ambiguous by nature, and WitDiff reports them rather than

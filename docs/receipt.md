@@ -48,6 +48,33 @@ the digest can.
 Two receipts with the same `verification_digest` describe the same verified
 inputs. That is checkable without any key material.
 
+## Environment
+
+The receipt records the environment that produced it: the configured test
+program and its version, the toolchain that participates in it, and a digest of
+each dependency manifest present (`Cargo.lock`, `package-lock.json`, `go.sum`,
+`Gemfile.lock`, and so on).
+
+This answers a question the digest deliberately does not. The digest says *what*
+was verified; the environment says *where*. A proof that holds under Python 3.9
+and pytest 8.4 is a different claim than the same revision under Python 3.12 and
+pytest 9, and until this field existed the receipt could not tell them apart.
+
+Two deliberate boundaries:
+
+- **It is not folded into the verification digest.** That digest is recomputed by
+  `witdiff receipt` against a stored receipt, and folding the environment in
+  would make every older receipt report that its inputs changed the moment
+  Python was upgraded — a false staleness warning on entirely unchanged
+  evidence. The two answer different questions and are recorded separately.
+- **It is not signed**, for the same reason the other receipt fields are not.
+  ADR-0022 keeps signed bytes to the status and the digest so that adding a
+  field cannot invalidate an existing signature. The environment is descriptive
+  evidence for a reader and carries no authority on its own.
+
+Manifests are digested rather than copied, so a consumer can answer "did the
+dependencies change?" without receiving anyone's dependency list.
+
 ## Signatures
 
 A receipt can carry a detached Ed25519 signature. It proves two things: that the

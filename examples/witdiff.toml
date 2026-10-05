@@ -54,3 +54,36 @@ max_mutants_per_function = 5
 # signing_key = "/run/secrets/witdiff-signing-key.pem"
 # Make an unsigned receipt fail a CI gate rather than pass quietly.
 # signing_failure_exit_code = 2
+
+# ---------------------------------------------------------------------------
+# Gate policy
+# ---------------------------------------------------------------------------
+#
+# Which results count as a pass, committed once rather than restated as flags
+# on every invocation. The command-line flags that correspond to these still
+# work, but they may only *tighten* this policy: leaving `--strict` off cannot
+# relax a `strict = true` here, or every developer could undo what CI enforces.
+#
+# The set of questions is deliberately small, and deliberately not a list of
+# acceptable statuses. An allow-list would let a repository write
+# `pass = ["not_verified"]` and defeat the tool by configuration. Policy
+# decides how strictly a verdict is judged, never which verdicts exist.
+[gate]
+# Require exactly `verified`, refusing `verified_with_warnings`.
+strict = false
+
+# Treat "nothing to prove" as a failure, for repositories that require a test
+# change with every pull request. With this off, a documentation-only change
+# passes and is reported as *nothing to prove*, so a pass is never mistaken for
+# a proof.
+fail_on_no_changed_tests = false
+
+# Require the receipt to carry a signature. This is the one requirement about
+# the receipt document rather than about the verdict, which is why it is
+# expressed here and not as a flag. It applies uniformly: a receipt for a change
+# with no tests must be signed too, because an operator who asked for signatures
+# asked for them on every receipt.
+#
+# Needs `verification.signing_key` to be set as well; otherwise every run fails
+# its gate, which is the intended reading of demanding what nobody produced.
+# require_signature = true

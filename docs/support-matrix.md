@@ -363,6 +363,20 @@ toolchain, so the structural comparison does not run and the receipt says so
 with a `test_source_unparsable` finding. Fewer findings, never wrong ones — but
 a real limitation, and a wrapper script is common in CI.
 
+**A shared cargo target directory breaks a second run.** The two workspaces are
+the same crate written by two revisions, so they write the same output path.
+After the base experiment rebuilds the buggy source, the shared artifact is
+newer than the workspace's own `src/lib.rs`, cargo treats it as fresh, and a
+**second** `verify` in the same directory reports `head_failed` for a workspace
+that compiles green. Measured: three consecutive runs against isolated target
+directories were each `verified`; with a shared absolute target directory the
+second run flipped.
+
+The direction is safe — a false gate failure, never a false pass — but it is a
+confusing break, and it is exactly what CI does when `CARGO_TARGET_DIR` points at
+a cache shared across worktrees. Prefer isolated target directories, or rebuild
+before trusting a repeat run.
+
 Two things the Java work found by running the real thing, neither visible from
 reading the code:
 
