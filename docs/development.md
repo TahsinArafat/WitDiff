@@ -28,6 +28,36 @@ cargo run -p witdiff -- --help
 cargo run -p witdiff -- inspect --base HEAD~1
 ```
 
+## Agent integrations
+
+`integrations/` holds ready-made packages for Claude Code, OpenCode, Pi and
+Cursor, plus a generic instruction snippet. Each is written against that
+harness's documented extension format, and
+`crates/witdiff-cli/tests/integrations.rs` asserts the conventions those
+harnesses enforce: a skill's `name` matching its directory, the Agent Skills
+name pattern, Cursor's required frontmatter, and that Pi and OpenCode manifests
+point at files that exist.
+
+That test exists because a malformed integration does not fail loudly. The
+harness simply does not load it, which is indistinguishable from a working
+integration with nothing to say.
+
+`integrations/install.sh` copies them into a project or your home config. It
+never overwrites an existing file, and it deletes nothing — a test asserts it
+contains no removal command, so an edit you made is never lost to a re-run.
+
+## Building a release
+
+`.github/workflows/release.yml` builds binaries for five targets on a tag
+matching `v*`, verifies every platform is present before publishing, and
+attaches the archives plus `SHA256SUMS`. Each target is built on its own runner
+rather than cross-compiled.
+
+The workflow asserts the workspace's declared `rust-version` still builds. That
+is worth having as a check rather than a claim: the workspace declared 1.78
+while a transitive dependency had moved to edition 2024 and `globset` required
+1.88, so the documented floor was false until it was measured.
+
 ## End-to-end verification tests
 
 `crates/witdiff-core/tests/verify_end_to_end.rs` drives `verify_repository`

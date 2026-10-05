@@ -1,0 +1,14 @@
+{
+  "name": "@witdiff/pi-witdiff",
+  "version": "1.0.0",
+  "description": "WitDiff verification skill for Pi: run an independent red/green proof before claiming a change is complete.",
+  "keywords": ["pi-package", "witdiff", "verification", "testing"],
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TahsinArafat/WitDiff"
+  },
+  "pi": {
+    "skills": ["./skills"]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@witdiff/opencode-witdiff",
+  "version": "1.0.0",
+  "description": "WitDiff verification plugin for OpenCode: a `witdiff_verify` tool that runs an independent red/green proof and refuses to let a failed gate be reported as success.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TahsinArafat/WitDiff"
+  },
+  "type": "module",
+  "main": "plugins/witdiff.ts",
+  "files": [
+    "plugins",
+    "skills"
+  ],
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  }
+}

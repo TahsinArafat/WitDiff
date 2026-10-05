@@ -1,0 +1,48 @@
+---
+description: Verify a change with WitDiff before claiming it is complete, and report the result faithfully. Use when finishing a task, fixing a bug, or asked whether tests prove a change.
+alwaysApply: true
+---
+
+# Verify with WitDiff before claiming completion
+
+WitDiff runs a deterministic experiment: it transplants the changed tests onto
+the base revision and checks they **fail there and pass here**. A test that
+passes on both revisions proves nothing, however confident anyone is.
+
+Before saying a change is complete, verified, or fixed:
+
+```bash
+witdiff verify --base origin/main --strict --json
+```
+
+Use the repository's real target branch for `--base`.
+
+## The exit code is three signals, not two
+
+- `0` — the claim was proven, or there was nothing to prove
+- `1` — WitDiff itself failed to run; a tool error, not a verification result
+- `2` — verification did not pass
+
+**Do not report a change as complete while it exits 2.** Exit code 2 is a failed
+gate, not a crash, and not a reason to retry.
+
+## Exit 0 is not by itself proof
+
+Check `status` in the receipt:
+
+- `verified` — proven. The base experiment failed for a test reason and passes here.
+- `verified_with_warnings` — proven, with integrity findings. Read them.
+- `no_changed_tests` — nothing was proven, because no test changed.
+- `not_verified` — a proof was attempted and did not establish the claim.
+- `head_failed` — the workspace's own tests fail; fix that first.
+- `base_incompatible` — the transplanted test did not compile against the base.
+
+## Report faithfully
+
+- Quote the `status` and every integrity finding. Never summarize as "tests pass".
+- Never rewrite, suppress, or reinterpret a failed result.
+- If WitDiff reports an unsupported case — inline tests it declined to splice, a
+  lossily encoded path, a base that did not parse — state the limitation. An
+  unsupported case is not a pass.
+- If `evidence_fresh` is false, the workspace moved during the run. Re-run; do
+  not cite the stale receipt.

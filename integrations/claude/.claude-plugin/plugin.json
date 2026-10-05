@@ -1,0 +1,13 @@
+{
+  "name": "witdiff",
+  "version": "1.0.0",
+  "description": "WitDiff verification skill: run an independent red/green proof before claiming a change is complete.",
+  "author": {
+    "name": "TahsinArafat",
+    "url": "https://github.com/TahsinArafat"
+  },
+  "homepage": "https://github.com/TahsinArafat/WitDiff",
+  "repository": "https://github.com/TahsinArafat/WitDiff",
+  "license": "GPL-3.0-or-later",
+  "keywords": ["verification", "testing", "red-green", "witdiff"]
+}

@@ -31,9 +31,16 @@ The core v0.1 invariant is:
 crates/witdiff-core   deterministic domain logic and Git/test execution
 crates/witdiff-cli    user-facing binary only
 docs/                   product, architecture, verification, roadmap, agent guidance
+integrations/           agent harness packages (Claude Code, OpenCode, Pi, Cursor)
 examples/               sample config and output
-.github/                 CI and issue templates
+.github/                 CI, release and issue templates
 ```
+
+`integrations/` carries one skill body per harness, and
+`crates/witdiff-cli/tests/integrations.rs` asserts the conventions each harness
+enforces — a name matching its directory, required frontmatter, manifests
+pointing at files that exist. A malformed integration fails silently in the
+harness, so it is checked here instead.
 
 Do not create a framework-shaped directory tree without an implemented need. New crates require a concrete isolation reason (platform boundary, protocol boundary, or heavy optional dependency).
 

@@ -19,6 +19,55 @@ For repositories with dedicated changed test files, WitDiff can establish whethe
 
 WitDiff reports uncertainty conservatively.
 
+## The proof, step by step
+
+1. identify changed dedicated test files;
+2. run the configured test suite against the current workspace — the **green**
+   run;
+3. run the untouched base as a control, and require it to be green;
+4. transplant only the changed tests onto the chosen base revision;
+5. run the same command against base plus changed tests — the **red** run;
+6. refuse to count a compile-only failure as behavioural evidence;
+7. flag test weakening, such as a removed assertion or a newly ignored test;
+8. fingerprint the workspace before and after, so stale evidence is never
+   silently accepted;
+9. write a machine-readable receipt that an agent, CI, or a human can consume.
+
+Nothing in that sequence asks a model for an opinion. Steps 2, 3 and 5 are exit
+codes; step 6 is a classification of output; step 7 is a structural comparison
+between two revisions; step 8 is a hash.
+
+## What is implemented
+
+- Git repository discovery and automatic base selection
+- changed-file classification and configurable dedicated-test globs
+- tracked and untracked changed-test support across a detached base worktree
+- test-only patch transplantation, with ineligible files named rather than
+  smuggled through
+- HEAD, pristine-base control and base-plus-tests runs, each with a bounded
+  timeout
+- framework-specific failure classification: cargo, pytest, Jest/Vitest, Go,
+  Java and Ruby
+- structural test-integrity analysis for Rust, Python, Go, Java, Ruby and
+  JavaScript/TypeScript, sharing one rule engine
+- NUL-delimited Git path handling, so a non-ASCII path is classified correctly
+- workspace evidence fingerprinting that distinguishes build output from a real
+  source change
+- a content digest and revision binding, plus optional Ed25519 signatures
+- environment evidence: the toolchain and dependency manifests the run used
+- coverage of the changed production lines (Rust, opt-in)
+- a sandboxed runner that executes the candidate's test command in a container
+  (opt-in)
+- an append-only provenance chain across verifications
+- a committed gate policy deciding which results pass
+- JSON receipt persistence, human and JSON CLI output
+- `init`, `doctor`, `inspect`, `verify` and `receipt` commands
+- an MCP server exposing `inspect`, `verify` and `receipt`
+- a reusable GitHub Actions workflow and `--github-annotations`
+
+Which parts are verified against real toolchains, as opposed to implemented, is
+in [the support matrix](support-matrix.md).
+
 ## Primary users
 
 - developers reviewing agent-generated patches;

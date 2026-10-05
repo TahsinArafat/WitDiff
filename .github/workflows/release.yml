@@ -1,0 +1,157 @@
+name: Release
+
+# Builds prebuilt binaries and attaches them to a GitHub Release.
+#
+# Tag a commit and push the tag:
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# Every target is built on its own runner rather than cross-compiled, so the
+# artifacts are produced by the platform they run on. Cross-compiling would need
+# a linker and sysroot per target, and a subtly wrong cross-build is worse than
+# no binary because it fails on the user's machine rather than here.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # A single platform failure should not discard the artifacts the others
+      # produced; the release step below refuses to publish a partial set.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: witdiff-x86_64-unknown-linux-gnu.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: witdiff-aarch64-unknown-linux-gnu.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: witdiff-aarch64-apple-darwin.tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: witdiff-x86_64-apple-darwin.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: witdiff-x86_64-pc-windows-msvc.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # The workspace's rust-version is the lower bound the README promises, so
+      # publishing from a newer toolchain must be intentional rather than
+      # accidental. This asserts the declared floor still builds, not just that
+      # today's stable does.
+      #
+      # It previously declared 1.78, which was simply false: a transitive
+      # dependency had moved to edition 2024 and `globset` now requires 1.88.
+      # The check exists so the claim is measured rather than asserted.
+      - name: Check the declared minimum toolchain
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          rustup toolchain install 1.88 --profile minimal
+          cargo +1.88 build --release --locked -p witdiff
+
+      - name: Build
+        run: cargo build --release --locked -p witdiff --target ${{ matrix.target }}
+
+      - name: Stage the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          name="witdiff"
+          if [ "${{ runner.os }}" = "Windows" ]; then name="witdiff.exe"; fi
+          cp "target/${{ matrix.target }}/release/$name" "dist/$name"
+          cp README.md LICENSE dist/
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd dist
+          tar czf "../${{ matrix.archive }}" witdiff README.md LICENSE
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.archive }}"
+
+      # A checksum lets an installer verify what it downloaded, which matters
+      # most for the platform whose binary a user cannot read.
+      - name: Checksum
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile "${{ matrix.archive }}" SHA256 | sed -n 2p | tr -d ' \r' > "${{ matrix.archive }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.archive }}" | awk '{print $1}' > "${{ matrix.archive }}.sha256"
+          fi
+          echo "${{ matrix.archive }}: $(cat "${{ matrix.archive }}.sha256")"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # A partial release would hand users a download that does not exist for
+      # their platform, so every target must be present before publishing.
+      - name: Require every platform
+        run: |
+          expected=5
+          found=$(ls artifacts/*.tar.gz artifacts/*.zip 2>/dev/null | wc -l)
+          echo "archives found: $found"
+          ls -la artifacts
+          if [ "$found" -ne "$expected" ]; then
+            echo "::error::expected $expected platform archives, found $found; refusing to publish a partial release"
+            exit 1
+          fi
+
+      - name: Combine checksums
+        run: |
+          cd artifacts
+          cat *.sha256 > SHA256SUMS
+          # Pair each digest with its file name, which is the format
+          # `sha256sum -c` expects.
+          rm -f *.sha256
+          for f in *.tar.gz *.zip; do
+            shasum -a 256 "$f" | awk '{print $1"  "$2}'
+          done > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true

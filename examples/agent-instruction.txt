@@ -1,12 +1,12 @@
 WitDiff: deterministic verification for AI-written code
 ======================================================
 
-Copy the section below into your project's agent guidance (CLAUDE.md, AGENTS.md,
-.cursorrules, or equivalent). It is written to be used as-is.
+The maintained version of this snippet lives at
+`integrations/generic/AGENTS.md`, alongside installable packages for Claude
+Code, OpenCode, Pi and Cursor. That file adds the status table and the
+exit-code rules; this one is kept because older checkouts link to it.
 
-WitDiff produces evidence; it does not produce opinions. Nothing here asks the
-agent to judge its own work.
-
+Run `integrations/install.sh` to set up the harness you use.
 
 --- BEGIN INSTRUCTION SNIPPET ---
 
