@@ -63,6 +63,36 @@ pub struct VerificationConfig {
     /// it still passes.
     #[serde(default = "one")]
     pub flake_repeats: usize,
+    /// Dependency directories to make available to the base worktree.
+    ///
+    /// The base experiment runs in a `git worktree`, which contains only
+    /// committed files. A project whose dependencies are gitignored —
+    /// Composer's `vendor/`, npm's `node_modules/`, a Python `venv/` — therefore
+    /// cannot start its test command on the base revision at all: the run fails
+    /// with something like `Could not open input file: vendor/bin/phpunit`, and
+    /// the receipt reports `base control: FAIL`, which reads as "the base is
+    /// broken" rather than "the base could not start".
+    ///
+    /// Each directory is **symlinked** from the workspace into the worktree
+    /// when the workspace has it and the worktree does not. A symlink is used
+    /// rather than a copy because `node_modules` can be gigabytes, and rather
+    /// than `cp -al` because a hardlink tree would share inodes that a test run
+    /// could then mutate.
+    ///
+    /// **Only when the lockfile is unchanged.** Sharing the workspace's
+    /// dependencies with the base revision is sound exactly when the two
+    /// revisions resolve to the same dependency set. If `composer.lock`,
+    /// `package-lock.json`, `Cargo.lock` or `go.sum` changed between base and
+    /// head, the workspace's installed dependencies are *not* what the base
+    /// revision would have installed, and linking them would run the base
+    /// against a dependency set it never declared. That direction can invent a
+    /// failure or hide a regression, so in that case nothing is linked and the
+    /// receipt says so.
+    ///
+    /// Opt-in and explicit: this changes what the base experiment executes,
+    /// which is a semantic decision about evidence rather than a convenience.
+    #[serde(default)]
+    pub base_dependency_dirs: Vec<String>,
     /// Run the test command inside a container instead of on the host.
     ///
     /// When set to an image name, the command is rewritten to
@@ -233,6 +263,10 @@ impl Default for VerificationConfig {
             // repository once the full-suite path is understood.
             targeted_test_selection: false,
             flake_repeats: 1,
+            // Empty by default: linking a dependency directory into the base
+            // worktree changes what the base experiment executes, so it is
+            // opted into per repository rather than guessed.
+            base_dependency_dirs: Vec::new(),
             sandbox_image: None,
             sandbox_env: Vec::new(),
             sandbox_network: true,

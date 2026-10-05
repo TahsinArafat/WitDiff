@@ -1,3 +1,4 @@
+pub mod basedeps;
 pub mod config;
 pub mod coverage;
 pub mod digest;

@@ -194,6 +194,20 @@ pub fn verify_repository(
         // `?` from patch application or test spawning.
         let mut guard = WorktreeGuard::create(repo, &worktree, &base)?;
 
+        // A gitignored dependency directory does not exist in a worktree, so
+        // the base control run cannot start. Link the workspace's copy in when
+        // the operator configured it AND the lockfile did not change — see
+        // `basedeps` for why that guard is load-bearing rather than cautious.
+        let linking = crate::basedeps::link_dependencies(
+            repo.root(),
+            &worktree,
+            &config.verification.base_dependency_dirs,
+            crate::basedeps::lockfiles_unchanged(repo, &base, &inspect.head_commit),
+        )?;
+        if let Some(note) = linking.note() {
+            notes.push(note);
+        }
+
         // Control experiment: the untouched base must pass before we can attribute
         // a later failure to the transplanted regression tests.
         let control_outcome = crate::run::run_repeating(
