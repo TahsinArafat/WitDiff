@@ -114,9 +114,13 @@ if [ "$UNINSTALL" -eq 1 ]; then
   echo "Done: ${removed} removed."
   if command -v pi >/dev/null 2>&1; then
     echo
-    echo "Pi keeps its own record. Remove the package with:"
-    echo "  pi remove $SRC/pi"
-    echo "or, if it was installed with --local, edit .pi/settings.json."
+    # The source Pi recorded is not necessarily this script's location: a piped
+    # run installs from git, and $SRC is then a temporary directory that no
+    # longer exists by the time anyone reads this. The settings file is the
+    # authority, so the reader is pointed at it.
+    echo "Pi keeps its own record. Inspect it with:"
+    echo "  grep -A2 packages .pi/settings.json    # or ~/.pi/agent/settings.json"
+    echo "and remove the entry with \`pi remove <source>\`."
   fi
   exit 0
 fi
