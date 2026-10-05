@@ -97,6 +97,42 @@
   JUnit versions silently reports `0 tests found` and exits 0 — a green run that
   executed nothing.
 
+### Added
+
+- **Coverage of the changed production lines** (`verification.coverage`), as
+  supplementary evidence: it reports how many of the lines a change added the
+  tests actually executed, with per-file detail. Counts added lines from a
+  `-U0` patch rather than whole files, so a one-line edit to a 3000-line file
+  is measured as one line. Never affects `status` or `red_green_proven` —
+  a run with coverage enabled and one without are asserted to reach the same
+  verdict, for the same reason mutation does not (ADR-0011).
+
+  Needs `cargo-llvm-cov`, and reports "not measured" rather than approximating
+  for any other framework. It re-runs the suite with instrumentation, so it is
+  a second full test run and off by default.
+
+- **Environment evidence** on the receipt: the configured test program, its
+  version, the toolchain that participates in it, and a digest of each
+  dependency manifest. Kept out of the verification digest so upgrading Python
+  cannot make an older receipt report itself stale.
+
+- **A committed gate policy** (`[gate]` in `witdiff.toml`), which decides which
+  results pass. Command-line flags may only tighten it, so a repository's own
+  floor cannot be undone by leaving `--strict` off. Deliberately not an
+  allow-list of statuses, which would let a repository configure itself out of
+  the tool.
+
+- **A provenance chain** (`.witdiff/provenance.json`) linking each receipt's
+  digest to the one before it, so a sequence of verifications can be checked as
+  a sequence. Editing, dropping or reordering an entry breaks the links that
+  follow, and both `verify` and `receipt` report it.
+
+- **Sandboxed execution** (`verification.sandbox_image`), which rewrites every
+  run — head, control, experiment and mutants — into a named container, since
+  `test_command` comes from the changeset under review. The container is named
+  so a timeout can remove it rather than leaving candidate code running; the
+  environment is an allow-list; `--network none` is available.
+
 ### Fixed
 
 - **The reusable workflow never captured WitDiff's exit code.** The verify step

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod coverage;
 pub mod digest;
 pub mod environment;
 pub mod framework;

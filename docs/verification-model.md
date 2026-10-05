@@ -291,6 +291,38 @@ oracle — the question rather than the answer. Some mutants are equivalent to t
 original program and can never be killed by any test; WitDiff does not attempt
 equivalence detection and says so rather than guessing.
 
+## Coverage of changed code
+
+Coverage answers a question neither the red/green experiment nor mutation asks
+directly: of the lines **you changed**, how many did the tests actually execute?
+
+A transplanted test can fail on the base for the right reason and still barely
+touch the code the change rewrote, and a surviving mutant tells you the tests do
+not notice a mutation but not how much of the diff they reach. Coverage is the
+measure of reach.
+
+It is deliberately **evidence and never a verdict**, for the same reason mutation
+is (ADR-0011). An uncovered line is not evidence that the code is wrong — it is
+a question about test strength, so it is reported and a human decides. It never
+affects `status` or `red_green_proven`; a test run with coverage enabled and one
+without are asserted to reach the same verdict.
+
+Three details are deliberate:
+
+- **It counts added lines, not whole files.** A change touching one line of a
+  3000-line file is not 3000 lines of coverage or the absence of it. The report
+  counts only lines the `-U0` patch added.
+- **It is a separate run.** Coverage instruments the suite, so it costs a second
+  full test run and is off by default. It runs after the proof, and a failure to
+  measure it cannot undo evidence already gathered.
+- **It is reported even when it is zero.** "No changed lines were measurable"
+  and "no changed line was executed" are different claims, and conflating them
+  would turn a genuine gap into a parsing failure that reads like a missing
+  measurement.
+
+Currently implemented for `cargo test` only; another framework is reported as
+not measured rather than approximated.
+
 ## Targeted test selection
 
 Opt-in through `verification.targeted_test_selection`, default `false`. When

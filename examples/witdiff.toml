@@ -92,6 +92,17 @@ max_mutants_per_function = 5
 # anything it can read in the workspace.
 # sandbox_network = false
 
+# Coverage of the production lines this change adds.
+#
+# Evidence, never a verdict: it never changes the status, for the same reason
+# mutation does not (ADR-0011). An uncovered line is a question about test
+# strength, not a judgment about correctness.
+#
+# It re-runs the suite with instrumentation, so it costs a second full test run
+# and is off by default. Only implemented for `cargo test`; another framework is
+# reported as not measured rather than approximated.
+# coverage = false
+
 # ---------------------------------------------------------------------------
 # Gate policy
 # ---------------------------------------------------------------------------

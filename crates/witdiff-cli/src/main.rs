@@ -679,6 +679,28 @@ fn print_receipt_summary(receipt: &Receipt) {
     // reader can see at a glance that this proof was produced under a known
     // toolchain. The full map is in the JSON, where it is comparable across
     // receipts rather than merely readable.
+    // Coverage is evidence, never a verdict: shown with the other
+    // supplementary signals and deliberately outside the gate. A low number is
+    // a question about the tests, not a reason to reject a proof.
+    if let Some(report) = &receipt.coverage {
+        match report.covered_percent() {
+            Some(percent) => println!(
+                "  changed coverage : {}/{} line(s) ({percent:.0}%)",
+                report.changed_lines_covered, report.changed_lines
+            ),
+            None => println!("  changed coverage : no changed lines were measurable"),
+        }
+        for file in &report.files {
+            let gap = file.lines.saturating_sub(file.covered);
+            if gap > 0 {
+                println!(
+                    "                     {} — {}/{} covered, {gap} not",
+                    file.path, file.covered, file.lines
+                );
+            }
+        }
+    }
+
     if !receipt.environment.is_empty() {
         let tools = receipt
             .environment

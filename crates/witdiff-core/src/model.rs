@@ -561,6 +561,16 @@ pub struct Receipt {
     /// written before this field existed still parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mutation: Option<MutationReport>,
+    /// Coverage of the production lines this change added.
+    ///
+    /// Supplementary only: this field never affects `status`, for the same
+    /// reason mutation does not (ADR-0011). An uncovered line is a question
+    /// about test strength, not a judgment about correctness.
+    ///
+    /// Additive in v1 and omitted when coverage is disabled, so a receipt
+    /// written before this field existed still parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::coverage::CoverageReport>,
     /// The environment the evidence was produced under: toolchain versions and
     /// the digests of the dependency manifests that pinned them.
     ///

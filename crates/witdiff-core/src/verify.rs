@@ -449,6 +449,35 @@ pub fn verify_repository(
     })
     .ok();
 
+    // Coverage re-runs the suite, so it costs a second full test run and is
+    // off by default. It runs last and its result is never consulted above: it
+    // is supplementary evidence, like mutation (ADR-0011), and a failure to
+    // measure it must not undo a proof already established.
+    let coverage = if config.verification.coverage {
+        let rust_timeout = timeout.unwrap_or_else(|| Duration::from_secs(600));
+        match crate::coverage::collect(repo, &base, &command, &production_paths, rust_timeout) {
+            Ok(report) => Some(report),
+            Err(error) => {
+                notes.push(format!(
+                    "coverage was requested but could not be measured: {error}; the \
+                     red/green evidence above is unaffected"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(report) = &coverage {
+        match report.covered_percent() {
+            Some(percent) => notes.push(format!(
+                "coverage: {} of {} changed line(s) executed by the tests ({percent:.0}%)",
+                report.changed_lines_covered, report.changed_lines
+            )),
+            None => notes.push("coverage: no changed production lines were measurable".to_owned()),
+        }
+    }
+
     // The environment is collected separately from the digest: the digest is
     // about *what* was verified and is recomputed later for freshness, while
     // this is about *where*. Folding it in would make every older receipt
@@ -558,6 +587,7 @@ pub fn verify_repository(
         verification_digest,
         signature,
         mutation,
+        coverage,
         environment,
     })
 }

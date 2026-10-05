@@ -86,6 +86,16 @@ pub struct VerificationConfig {
     /// supplementary evidence and never changes `status`.
     #[serde(default)]
     pub mutation: bool,
+    /// Measure how much of the changed production code the tests execute.
+    ///
+    /// Supplementary evidence: it never changes `status`, for the same reason
+    /// mutation does not (ADR-0011). It re-runs the suite with instrumentation,
+    /// so it is a second full test run and is off by default.
+    ///
+    /// Only implemented for a `cargo test` command; anything else is reported
+    /// as not available rather than approximated.
+    #[serde(default)]
+    pub coverage: bool,
     /// Maximum mutants attempted per run. Bounds are mandatory because mutation
     /// cost is otherwise unbounded; the truncation is deterministic.
     #[serde(default = "default_max_mutants")]
@@ -188,6 +198,7 @@ impl Default for VerificationConfig {
             sandbox_image: None,
             sandbox_env: Vec::new(),
             sandbox_network: true,
+            coverage: false,
             max_output_bytes: 16_384,
             // Generous by default so a cold CI build is not mistaken for a hang,
             // while still bounding a truly stuck suite.

@@ -1646,6 +1646,139 @@ fn the_environment_does_not_affect_the_verification_digest() {
     );
 }
 // ---------------------------------------------------------------------------
+// M6: coverage of changed production code
+// ---------------------------------------------------------------------------
+
+/// Coverage must distinguish the changed lines the tests executed from the
+/// changed lines they did not.
+///
+/// The fixture changes two production lines: one is called by the new test and
+/// one is not. Reporting either extreme — all covered, or none measurable —
+/// would make the field useless as evidence, and the second is exactly how the
+/// bug in hunk parsing surfaced: it read "no changed lines were measurable"
+/// instead of raising anything.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds and cargo-llvm-cov"]
+fn coverage_separates_exercised_changed_lines_from_ignored_ones() {
+    if !StdCommand::new("cargo")
+        .args(["llvm-cov", "--version"])
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        eprintln!("cargo-llvm-cov is not installed; skipping");
+        return;
+    }
+
+    let fixture = Fixture::new(&[
+        (
+            "src/lib.rs",
+            "pub fn add(a: i32, b: i32) -> i32 { a - b }\n\npub fn never_called(a: i32) -> i32 { a * 42 }\n",
+        ),
+        (
+            "tests/existing.rs",
+            "#[test]\nfn arithmetic() { assert_eq!(1 + 1, 2); }\n",
+        ),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+
+    // Two production lines change: `add` is fixed and called by the new test,
+    // `also_untouched` is added and never called.
+    fixture.write(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\npub fn never_called(a: i32) -> i32 { a * 42 }\npub fn also_untouched() -> i32 { 99 }\n",
+    );
+    fixture.write(
+        "tests/regression.rs",
+        "#[test]\nfn add_is_correct() { assert_eq!(witdiff_fixture::add(1, 1), 2); }\n",
+    );
+
+    let mut config = fixture_config();
+    config.verification.coverage = true;
+
+    let receipt = fixture.verify(&config);
+    let report = receipt
+        .coverage
+        .as_ref()
+        .expect("coverage was requested, so the receipt must record it");
+
+    assert!(
+        report.changed_lines > 0,
+        "changed production lines must be measurable, got {report:?}"
+    );
+    assert!(
+        report.changed_lines_covered >= 1,
+        "the line the new test calls must be reported as exercised, got {report:?}"
+    );
+    assert!(
+        report.changed_lines_covered < report.changed_lines,
+        "the added line nothing calls must be reported as NOT exercised; \
+         reporting everything covered would be a false result, got {report:?}"
+    );
+    assert!(
+        report.files.iter().any(|file| file.path == "src/lib.rs"),
+        "coverage must name the changed file, got {:?}",
+        report.files
+    );
+
+    // Coverage is evidence, never a verdict. Measured by running the identical
+    // fixture a second time with coverage off and requiring the same status,
+    // rather than asserting a particular status — which would only show what
+    // this fixture happens to produce.
+    // Rewriting the source updates its mtime, which forces a rebuild. Without
+    // it the second run reuses the artifact the base worktree left in this
+    // fixture's shared target directory — the hazard the module comment
+    // documents — and reports `head_failed` for a workspace that compiles green.
+    fixture.write(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\npub fn never_called(a: i32) -> i32 { a * 42 }\npub fn also_untouched() -> i32 { 99 }\n",
+    );
+    let plain = fixture.verify(&fixture_config());
+    assert_eq!(
+        receipt.status, plain.status,
+        "coverage must not change the verdict; with it {:?}, without it {:?}",
+        receipt.status, plain.status
+    );
+    assert_eq!(
+        receipt.red_green_proven, plain.red_green_proven,
+        "coverage must not change whether red/green was proven"
+    );
+}
+
+/// Coverage must be reported rather than silently absent when it was asked
+/// for, and must not be produced when it was not.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds and cargo-llvm-cov"]
+fn coverage_is_opt_in_and_never_improves_a_verdict() {
+    let fixture = Fixture::new(&[
+        (
+            "src/lib.rs",
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        ),
+        (
+            "tests/existing.rs",
+            "#[test]\nfn arithmetic() { assert_eq!(1 + 1, 2); }\n",
+        ),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b + 0 }\n",
+    );
+    fixture.write(
+        "tests/regression.rs",
+        "#[test]\nfn add_is_correct() { assert_eq!(witdiff_fixture::add(1, 1), 2); }\n",
+    );
+
+    let receipt = fixture.verify(&fixture_config());
+    assert!(
+        receipt.coverage.is_none(),
+        "coverage is opt-in; a default configuration must not measure it"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // ADR-0022: signed receipts
 // ---------------------------------------------------------------------------
 

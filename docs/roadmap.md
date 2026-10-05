@@ -123,7 +123,7 @@ the key; WitDiff never creates or stores one.
 
 ## M6 — advanced evidence
 
-- [ ] coverage of changed branches as evidence (not as sole proof)
+- [x] coverage of changed branches as evidence (not as sole proof)
 - [x] dependency/version/environment fingerprint
 - [x] sandboxed verification runner
 - [x] provenance chain across multiple verification stages
@@ -139,6 +139,10 @@ Shipped so far in M6:
 - **Gate policy** — `[gate]` in `witdiff.toml` commits which results pass, so a
   repository states it once rather than restating flags on every invocation.
   Flags may only tighten it.
+- **Coverage of changed lines** — the receipt reports how many of the lines this
+  change added the tests executed, with per-file detail. Counts added lines from
+  a `-U0` patch rather than whole files, is a separate opt-in run, and never
+  touches the verdict.
 - **Provenance chain** — `.witdiff/provenance.json` links each receipt's digest
   to the one before it, so a sequence of verifications can be checked as a
   sequence rather than one at a time. Editing, dropping or reordering an entry
