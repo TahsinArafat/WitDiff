@@ -113,6 +113,13 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    # Bounds how long this may *run*. It does not bound how long it may sit
+    # queued, which on a busy runner pool has exceeded fifteen minutes twice —
+    # and GitHub's default job timeout is six hours, so a wedged publish would
+    # hang rather than report. The builds have already succeeded and their
+    # artifacts are uploaded by then, so `gh run rerun --failed` recovers it
+    # without rebuilding anything.
+    timeout-minutes: 15
     # A manual run has no tag, and GitHub refuses to create a release without
     # one. Rather than fail, a manual run stops after uploading the artifacts:
     # its purpose is to verify the build matrix, and the archives are on the run

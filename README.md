@@ -163,6 +163,19 @@ Exit 0 is not by itself proof. `status` in the receipt says what was
 established; [`docs/verification-model.md`](docs/verification-model.md) explains
 every value.
 
+## See it work
+
+```bash
+./demo/run.sh
+```
+
+Builds a real repository where a fix is accompanied by a test that passes on
+both revisions, so plain `cargo test` is green and the test proves nothing.
+WitDiff reports `not_verified`. The same fix with a test that constrains the
+behaviour reports `verified`.
+
+See [`demo/`](demo) for the agent-driven version, including a real Pi session.
+
 ## What it checks
 
 **Red/green proof** — the core claim, for Rust, Python (pytest), Go,

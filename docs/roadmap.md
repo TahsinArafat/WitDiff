@@ -110,7 +110,9 @@ See `docs/support-matrix.md` for the per-language detail, including what Java,
 - [x] installable harness packages: a Claude Code skill, an OpenCode plugin with
   a callable tool, a Pi package, and a Cursor rule (`integrations/`), with an
   installer and a test asserting each harness's loading conventions
-- [x] prebuilt binaries per platform on GitHub Releases (`.github/workflows/release.yml`)
+- [x] prebuilt binaries per platform on GitHub Releases
+- [x] a runnable demo (`demo/run.sh`) showing a vacuous test being caught, and an
+  agent-driven walkthrough (`demo/README.md`) (`.github/workflows/release.yml`)
 - [x] MCP server wrapping core methods (`crates/witdiff-mcp`, ADR-0014)
 - [x] content digest and revision binding for receipts (ADR-0015 prerequisites)
 - [x] signature over the verification digest (ADR-0022)
