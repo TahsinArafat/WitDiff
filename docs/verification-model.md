@@ -409,6 +409,26 @@ red observation, and treating it as one would manufacture proof from a hang.
 
 WitDiff hashes the diff from base plus untracked changed-file content before and after verification. If the fingerprint changes, evidence is stale and a previously verified result is downgraded.
 
+Running the suite writes files, so "the workspace moved" alone is not the
+question. When **every** path that moved during the run is build output —
+`__pycache__`, `.pytest_cache`, `target/`, and friends — the source under
+verification did not move and the evidence still describes it, so the run stays
+fresh and the receipt says so in a note. Otherwise the gate is downgraded and
+the note names what changed.
+
+Two boundaries make that safe:
+
+- **One moved source file keeps the evidence stale**, so a real edit cannot hide
+  behind the artifacts a build always produces.
+- **A fingerprint change with no attributable path stays stale.** "It was only a
+  build" must not explain a change nobody can name; unexplained movement is
+  exactly what freshness exists to catch.
+
+Before this was separated, the receipt would call those paths irrelevant to the
+verification and fail the gate for them in the same sentence — and the downgrade
+applied unconditionally, so even after classification said otherwise a proof was
+erased.
+
 ## Status semantics
 
 ### `verified`

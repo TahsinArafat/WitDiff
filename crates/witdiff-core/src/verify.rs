@@ -512,7 +512,7 @@ pub fn verify_repository(
     }
 
     let after = repo.workspace_fingerprint(&base)?;
-    let evidence_fresh = before == after;
+    let mut evidence_fresh = before == after;
     if !evidence_fresh {
         // Name what moved, but summarize: a first build can touch hundreds of
         // paths under `target/`, and dumping them buries the one that matters.
@@ -538,26 +538,45 @@ pub fn verify_repository(
         let (build_output, source_paths): (Vec<&str>, Vec<&str>) =
             moved.iter().partition(|path| is_build_output(path));
 
-        let mut detail = Vec::new();
-        if !source_paths.is_empty() {
-            detail.push(format!("changed: {}", source_paths.join(", ")));
-        }
-        if !build_output.is_empty() {
-            detail.push(format!(
-                "{} build-output path(s) also appeared, which do not affect the verification",
+        if is_build_output_only(&moved) {
+            // The suite wrote files, and only files it was always going to
+            // write. The verified inputs did not move, so the evidence still
+            // describes them. Reported as a fact rather than as staleness: a
+            // run that produces `__pycache__` on a machine whose Python writes
+            // bytecode must not lose its gate to its own artifacts.
+            evidence_fresh = true;
+            notes.push(format!(
+                "{} build-output path(s) appeared while the tests ran; they are not \
+                 part of the verified inputs, so the evidence remains fresh",
                 build_output.len()
             ));
-        }
-        if detail.is_empty() {
-            detail
-                .push("the changed content could not be attributed to a specific path".to_owned());
-        }
+        } else {
+            let mut detail = Vec::new();
+            if !source_paths.is_empty() {
+                detail.push(format!("changed: {}", source_paths.join(", ")));
+            }
+            if !build_output.is_empty() {
+                detail.push(format!(
+                    "{} build-output path(s) also appeared",
+                    build_output.len()
+                ));
+            }
+            if detail.is_empty() {
+                detail.push(
+                    "the changed content could not be attributed to a specific path".to_owned(),
+                );
+            }
 
-        notes.push(format!(
-            "workspace changed while verification was running, so the evidence is stale ({}). If a tracked file changed, commit it and re-run. Build output should be listed in .gitignore.",
-            detail.join("; ")
-        ));
-        if status.is_verified() {
+            notes.push(format!(
+                "workspace changed while verification was running, so the evidence is stale ({}). If a tracked file changed, commit it and re-run. Build output should be listed in .gitignore.",
+                detail.join("; ")
+            ));
+        }
+        // Guarded on the verdict, not on entering the block: a run whose only
+        // movement was build output now sets `evidence_fresh` back to true
+        // inside this block, and downgrading here regardless would erase a
+        // proof for artifacts the receipt just called irrelevant.
+        if !evidence_fresh && status.is_verified() {
             status = VerificationStatus::NotVerified;
         }
     }
@@ -650,8 +669,24 @@ fn is_missing_program_error(error: &anyhow::Error) -> bool {
 /// Used to keep a staleness report readable. A first build can create hundreds
 /// of files under a target directory, and enumerating them buries the one or
 /// two source paths that actually matter.
+/// Whether every path that moved is build output, and something did move.
+///
+/// Running the suite writes files. When the *only* thing that appears during a
+/// run is build output, the source under verification has not moved and the
+/// evidence still describes it — which is what the receipt already claimed in
+/// its own note, by calling those paths irrelevant to the verification while
+/// failing the gate for them.
+///
+/// Deliberately false for an empty set: a fingerprint that changed with no
+/// attributable path is not explained by "it was only a build", so it stays
+/// stale. That is the conservative direction, because an unexplained change is
+/// exactly the case freshness exists to catch.
+fn is_build_output_only(moved: &[&str]) -> bool {
+    !moved.is_empty() && moved.iter().all(|path| is_build_output(path))
+}
+
 fn is_build_output(path: &str) -> bool {
-    const BUILD_DIRS: [&str; 8] = [
+    const BUILD_DIRS: [&str; 9] = [
         "target/",
         "node_modules/",
         ".venv/",
@@ -660,6 +695,10 @@ fn is_build_output(path: &str) -> bool {
         "build/",
         "dist/",
         ".mypy_cache/",
+        // pytest's cache directory. It normally writes its own `.gitignore`,
+        // so git never reports it — but when it does, failing a gate over the
+        // suite's own cache would be the same mistake as `__pycache__`.
+        ".pytest_cache/",
     ];
     let lower = path.to_ascii_lowercase();
     BUILD_DIRS
@@ -1109,7 +1148,7 @@ pub fn write_receipt(
 
 #[cfg(test)]
 mod staleness_tests {
-    use super::is_build_output;
+    use super::{is_build_output, is_build_output_only};
 
     /// Build output must be grouped rather than enumerated: a first build can
     /// touch hundreds of paths, and listing them buries the source change that
@@ -1127,6 +1166,46 @@ mod staleness_tests {
         ] {
             assert!(is_build_output(path), "{path} should count as build output");
         }
+    }
+
+    /// The case CI hit: a Python run whose interpreter writes bytecode leaves
+    /// `__pycache__` behind, and nothing gitignored it. Every moved path was
+    /// build output, so the source under verification had not moved — yet the
+    /// gate failed on it while the receipt's own note called those paths
+    /// irrelevant to the verification.
+    #[test]
+    fn a_run_that_only_produced_build_output_is_not_stale() {
+        let moved = [
+            "tests/__pycache__/test_existing.cpython-312.pyc",
+            "tests/__pycache__/test_regression.cpython-312.pyc",
+            ".pytest_cache/CACHEDIR.TAG",
+            ".pytest_cache/v/cache/nodeids",
+            ".pytest_cache/v/cache/lastfailed",
+        ];
+        assert!(
+            moved.iter().all(|path| is_build_output(path)),
+            "every one of these must classify as build output"
+        );
+        assert!(
+            is_build_output_only(&moved),
+            "a workspace whose only movement is build output must remain fresh"
+        );
+    }
+
+    /// The conservative direction: no attributable path means the change is
+    /// unexplained, and unexplained is what freshness exists to catch. Calling
+    /// it "only a build" would forgive a fingerprint change nobody can attribute.
+    #[test]
+    fn an_unattributed_change_is_not_forgiven_as_build_output() {
+        assert!(!is_build_output_only(&[]), "an empty set explains nothing");
+    }
+
+    /// One source file among the build output keeps the whole change stale, or
+    /// a real edit would hide behind the artifacts a build always makes.
+    #[test]
+    fn one_moved_source_file_keeps_the_evidence_stale() {
+        let moved = ["tests/__pycache__/test.cpython-312.pyc", "src/lib.rs"];
+        assert!(!is_build_output_only(&moved));
     }
 
     /// The dangerous direction: a source file must never be mistaken for build
