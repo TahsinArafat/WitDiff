@@ -58,6 +58,15 @@ is worth having as a check rather than a claim: the workspace declared 1.78
 while a transitive dependency had moved to edition 2024 and `globset` required
 1.88, so the documented floor was false until it was measured.
 
+By default every platform must build, or the release is refused — a partial
+release hands users a download that does not exist for them. `macos-15-intel`
+is the exception in practice: across three runs it sat queued for 16 to 18
+minutes while the other four started in about two. That is capacity rather than
+a defect, so the threshold is a repository variable,
+`WITDIFF_RELEASE_TARGETS`. Lowering it publishes the platforms that are reliably
+available and records the missing one in the job summary; the default is all
+five.
+
 ## End-to-end verification tests
 
 `crates/witdiff-core/tests/verify_end_to_end.rs` drives `verify_repository`
