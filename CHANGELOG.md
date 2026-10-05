@@ -2,6 +2,134 @@
 
 ## Unreleased
 
+### Added
+
+- **End-to-end red/green proof for pytest, Go, Ruby/RSpec and JavaScript.**
+  `verify_languages_end_to_end.rs` drives the whole v0.1 invariant against real
+  temporary Git repositories containing real projects: HEAD green, pristine
+  base control green, and base-plus-transplanted-test red **for a recognized
+  test reason**. Each reaching `Verified` with
+  `base_run.failure_kind = test_failure`.
+
+  Verifying an analyzer against a real parser is not the same as proving the
+  verification works, and this makes the distinction explicit. Python also gets
+  the negative direction: a test that passes on the base is reported
+  `not_verified`, and a gutted assertion is caught rather than accepted.
+
+  **Java is included**, driven by a real JUnit 5 platform. It reaches
+  `VerifiedWithWarnings` rather than `Verified`: a script-shaped test command
+  gives the Java analyzer no toolchain to derive, so structural analysis is
+  unavailable and the receipt reports that. Fewer findings, never wrong ones.
+
+  Assembling that JUnit classpath found a failure mode worth recording:
+  **mixing platform versions is silent**. A `1.14.4` platform with a `6.0.1`
+  Jupiter engine compiles the tests, runs them, prints `0 tests found`, and
+  exits 0 — a green run that executed nothing.
+
+### Fixed
+
+- **JavaScript integrity analysis reported no expectation changes, at all.**
+  The analyzer normalized Babel's `NumericLiteral`/`StringLiteral` but not
+  ESTree's `Literal`, which is what `acorn` emits — so every literal rendered as
+  the bare word `Literal`, and `expect(x).toBe(2)` and `expect(x).toBe(3)`
+  produced identical strings. The rule that is the entire point of the
+  comparison never fired for a JavaScript project.
+
+  Found by installing `acorn` and running the analyzer against it. Every test
+  that had covered this path passed beforehand, because each asserted against
+  hand-written output rather than the real parser's.
+
+- **`expect(x).not.toBe(1)` produced no assertion.** acorn places `.not`
+  between the call and the matcher, and the traversal unwrapped the wrong
+  level, so every negated expectation yielded nothing. Inverting an assertion —
+  which makes it pass for the wrong reason — was therefore silent.
+
+- **`test.skip`, `test.only` and `test.each` produced no test function.** Only
+  the bare `test(...)` form was recognized, so newly skipping a test was
+  invisible, which is the same class of silence as an ignored Rust test.
+
+- **Node's `assert` module was invisible.** `assert.strictEqual(a, 1)` and
+  `assert.deepEqual(a, 1)` are member calls; only a bare `assert*(...)` form
+  was recognized.
+
+- **Every TypeScript file either crashed or analyzed as empty.** The
+  TypeScript AST tags nodes with `kind`, not `type`, so the ESTree traversal
+  visited nothing; with `setParentNodes` on, the tree was cyclic and the
+  traversal recursed until `Maximum call stack size exceeded`. Literal kinds
+  also reverse-map to the alias `FirstLiteralToken`, so `2` normalized to that
+  word. And a parser that could not read the file was treated as final rather
+  than a reason to try the next one, so a TypeScript project with `acorn`
+  installed failed on every `.ts` file.
+
+- **`.tsx` files were rejected.** Every file was written to disk as
+  `input.js`, so the parser never saw a `.tsx` extension and rejected valid
+  JSX. The extension is load-bearing and is now preserved.
+
+- **Inverting an assertion reported nothing, in every language.**
+  `testshape`'s `expectation_of` returned only the right-hand side, so `Eq 1`
+  and `NotEq 1` compared equal. This was in the shared rule engine, not in the
+  JavaScript analyzer, so it affected every language using the operator-string
+  form; Rust escaped it only because its analyzer compares `macro_name`. The
+  comparison now includes the operator.
+
+- **Ruby classified a single-example red suite as an unrecognized command
+  failure.** The summary matcher required the plural `" examples,"`, but real
+  RSpec prints `1 example, 1 failure` for a one-example suite — and an
+  unrecognized failure cannot produce a proof, so every single-example Ruby
+  suite silently lost its red/green evidence. Minitest has the same singular
+  shape and the same gap.
+
+- **Ruby reported a suite that failed to load as a behavioural regression.**
+  Real RSpec reports a `LoadError` as `0 examples, 0 failures, 1 error occurred
+  outside of examples` — a non-zero error count on a summary line whose failure
+  count is zero. The test-failure check ran first and claimed it. Ruby now
+  checks compile failure before test failure, the reverse of every other
+  framework, because a load error is never behavioural evidence.
+
+### Changed
+
+- **CI runs the tests that prove the analyzers work.** The 100+ `#[ignore]`d
+  tests — the ones exercising real parsers and real runners — were skipped by
+  `cargo test`, so none of it was exercised on any pull request. CI now installs
+  Node, Python, Go, Ruby and a JDK, adds `acorn`/`typescript` via `npm ci`,
+  installs RSpec and pytest, and runs the `--ignored` suite. The Java
+  end-to-end proof additionally downloads a JUnit 5 platform, because mixing
+  JUnit versions silently reports `0 tests found` and exits 0 — a green run that
+  executed nothing.
+
+### Fixed
+
+- **The reusable workflow never captured WitDiff's exit code.** The verify step
+  was `witdiff verify ... | tee out; echo "exit_code=$?"`, but GitHub runs an
+  unspecified shell as `bash -e`, so a non-zero verify aborted the step before
+  the `echo`. `exit_code` stayed unset and the enforce step saw an empty string:
+  a **failed verification gate was reported as a WitDiff malfunction**, which
+  inverts the three-way distinction ADR-0013 exists to preserve.
+
+  Reproduced directly against `bash -eo pipefail`, which is what GitHub uses,
+  then fixed by capturing the code immediately with `set +e` around the run.
+  The enforce step now also reports an empty verdict as a tool error rather than
+  letting it pass.
+
+### Changed
+
+- **Signing and verification are pure Rust** (`ed25519-dalek`, ADR-0022). They
+  previously shelled out to Node's built-in `crypto`, which ADR-0022 recorded
+  as an environment workaround: the cargo cache could not be written, so the
+  crate could not be fetched or exercised. With that restriction lifted the
+  crate was added and exercised directly. No JavaScript runtime is now needed to
+  sign or verify a receipt.
+
+  The two properties that define what a signature *means* are preserved and
+  asserted against the real implementation: the domain separator
+  `witdiff.receipt-signature.v1\0`, and the status inside the signed bytes. The
+  latter is not cosmetic — signing the digest alone let a receipt forged from
+  `not_verified` to `verified` still verify as VALID.
+
+  Keys are raw 32-byte files: a seed to sign, a public key to verify.
+  Verification deliberately does not accept a private seed, so a verifier never
+  needs private key material.
+
 ### Documentation
 
 - **ADR-0015 designs signed receipts and declines to implement them yet.** The

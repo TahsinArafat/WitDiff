@@ -71,15 +71,27 @@ ADR-0011.
 - [x] test framework capability trait (classification and optional targeted invocation)
 - [x] framework-specific failure classification
 
-Verified end to end against real toolchains: pytest, Go and Java repositories
-each reach `verified` and report integrity findings, where before ADR-0012 the
-same pytest failure classified as `CommandFailure` and could not produce a proof
-at all.
+Verified end to end against real toolchains: pytest, Go, Java, Ruby/RSpec and
+JavaScript/TypeScript repositories each reach `verified` and report integrity
+findings, where before ADR-0012 the same pytest failure classified as
+`CommandFailure` and could not produce a proof at all.
 
 Structural integrity analysis exists for **Rust (ADR-0006), Python (ADR-0016),
 Go (ADR-0017), Java (ADR-0018), Ruby (ADR-0020) and JavaScript/TypeScript
 (ADR-0021)**. All share one rule engine (`witdiff_core::testshape`), so no
 language can disagree about what a weakening is.
+
+Every language above is now verified against its **real** parser or runner, not
+a hand-written fixture. Doing so found nine bugs — six in JavaScript, two in
+Ruby's classifier, and one in the shared rule engine that had affected every
+language using it.
+
+`verify_languages_end_to_end.rs` additionally drives the whole red/green chain
+against real temporary repositories for **all five**: pytest, Go, Ruby/RSpec,
+JavaScript/TypeScript and Java. Java reaches `VerifiedWithWarnings` rather than
+`Verified` because a script-shaped test command yields no Java toolchain, so
+structural analysis is unavailable — which the receipt reports. See
+`docs/support-matrix.md`.
 
 Still open:
 
@@ -103,12 +115,11 @@ CI gating treats "nothing to prove" as distinct from "the proof failed", so a
 documentation-only pull request no longer fails the check. The policy lives in
 the CLI rather than the workflow file, so CI, MCP and local scripts agree.
 
-Signed receipts are designed but not implemented (ADR-0015). The design found
-that a signature over the receipt as currently shaped would attest that a run
-happened, not which code was verified: on a clean tree the workspace fingerprint
-is exactly SHA-256 of the empty string, so it distinguishes nothing. A content
-digest over the verified inputs and a checkable revision binding must land
-first; key management and the goal of the attestation are still open.
+Signed receipts are implemented (ADR-0022, superseding the ADR-0015 design). The
+signature is a detached Ed25519 signature over the domain separator, the status
+and the content digest, computed by `ed25519-dalek` in Rust — no external
+runtime. It is tamper-evidence, not non-repudiation, and the operator supplies
+the key; WitDiff never creates or stores one.
 
 ## M6 — advanced evidence
 

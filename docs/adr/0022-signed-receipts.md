@@ -40,15 +40,16 @@ and which algorithm. They are answered here.
 3. **Ed25519.** Small, fast, and independently verifiable with standard tooling.
    No key-size or parameter choices to get wrong.
 
-4. **Ed25519 is reached through Node's built-in `crypto`, and only when signing.**
-   This is a workaround for the development environment, recorded as such.
+4. **Ed25519 is reached through `ed25519-dalek`, in Rust.**
 
-   Measured, in order:
+   This supersedes the earlier decision to route Ed25519 through Node's built-in
+   `crypto`, which was recorded here as an environment workaround rather than a
+   design choice. The reasoning at the time was:
 
-   - `ed25519-dalek` resolves against the workspace's `rust-version = 1.78` but
-     pulls 68 packages and **cannot be downloaded or compiled here** — the cargo
-     cache is outside the sandbox's writable area. Shipping signing code that was
-     never compiled or exercised is the exact failure this project exists to
+   - `ed25519-dalek` resolved against the workspace's `rust-version = 1.78` but
+     pulled 68 packages and **could not be downloaded or compiled** — the cargo
+     cache was outside the sandbox's writable area. Shipping signing code that
+     was never compiled or exercised is the exact failure this project exists to
      catch, so it was rejected.
    - `openssl` is present on macOS, but as **LibreSSL**, which does not implement
      Ed25519 at all: `openssl genpkey -algorithm ed25519` reports "Algorithm
@@ -57,16 +58,29 @@ and which algorithm. They are answered here.
    - Node's built-in `crypto` performs Ed25519 sign and verify with **no
      dependency**, verified directly.
 
-   The cost is that Node must be present to sign. That is bounded deliberately:
-   Node is required **only** when a caller asks to sign or verify a signature,
-   never during ordinary verification. A Rust, Python or Go repository with no
-   signature never touches it, which keeps ADR-0021's principle intact — the
-   project's own resources are used, and nothing extra is imposed.
+   The cargo restriction that forced this is gone, so `ed25519-dalek` was added
+   and **exercised**: sign, verify, a wrong key, a modified signature, a
+   different digest, and a forged status. Node is no longer required to sign or
+   verify anything. The ADR predicted this would be "a contained change to one
+   module", and it was: `signing.rs` only, with no change to the receipt schema
+   or to any other module.
 
-   This is an implementation choice, not a design one. The signature covers a
-   digest and uses Ed25519 either way, so moving to a Rust crate later is a
-   contained change to one module. The constraint that forced it should not
-   outlive it.
+   The cost Node carried is now gone with it. A Rust, Python or Go repository no
+   longer needs a JavaScript runtime present to produce or check a signature.
+
+   Two things were preserved deliberately, because they define what the
+   signature *means* rather than how it is computed:
+
+   - the domain separator `witdiff.receipt-signature.v1\0`; and
+   - **the status inside the signed bytes**, not merely the digest.
+
+   Both are asserted in `tests/signing.rs` against the real implementation, so a
+   backend change cannot quietly drop either.
+
+   Key material is read as raw bytes: a 32-byte seed to sign, a 32-byte public
+   key to verify. Verification deliberately does **not** accept a private seed,
+   so a verifier never needs private key material and a missing public key
+   cannot hide behind a file that happens to contain one.
 
 5. **What is signed.** A detached signature over the domain separator followed
    by the **status and the digest**:
@@ -106,14 +120,18 @@ and which algorithm. They are answered here.
   with the same digest describe the same verification.
 - Verification of a signature is separate from `witdiff receipt`: ordinary
   staleness reporting stays key-free and Node-free.
-- Node becomes an optional dependency of signing only. On a machine without it,
-  signing fails with an explicit message and ordinary verification is unaffected.
+- Node is no longer an optional dependency of signing. Signing and verification
+  are pure Rust, so a signed receipt works on a machine with no JavaScript
+  runtime. Ordinary verification never depended on it and still does not.
+- The signature is computed by `ed25519-dalek`, which is verifiable by any
+  standard Ed25519 implementation against the documented bytes
+  `witdiff.receipt-signature.v1\0<status>\0<digest>`.
 
 ## Alternatives considered
 
-- **ed25519-dalek in Rust.** The natural choice, rejected only because it cannot
-  be built or tested here. Recorded as the preferred implementation wherever
-  dependencies can be fetched.
+- **ed25519-dalek in Rust.** Rejected originally only because it could not be
+  built or tested here. **Adopted** once that restriction was lifted; see
+  decision 4.
 - **openssl.** Rejected on measurement: LibreSSL on macOS has no Ed25519, so the
   feature would work in CI and fail on developer machines.
 - **Ship the key to a key server (sigstore and similar).** Rejected: it answers
