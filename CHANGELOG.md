@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Nothing yet.
+
+## 1.0.0-alpha.1
+
+First prebuilt release. The proof semantics are unchanged from 1.0.0; what this
+adds is the work needed to put WitDiff in front of someone who is not building
+it from source — installable harness packages, a release pipeline, and the
+verification gaps closed against real toolchains.
+
+It is an **alpha**: the four open items in `docs/roadmap.md` are feature scope,
+not defects, and the Java and RSpec paths were verified against live toolchains
+for the first time during this cycle. Use it, but read
+`docs/support-matrix.md` for what is proven per language rather than assuming
+the feature list means uniform coverage.
+
 ### Added
 
 - **End-to-end red/green proof for pytest, Go, Ruby/RSpec and JavaScript.**

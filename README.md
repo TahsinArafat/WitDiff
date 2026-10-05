@@ -28,15 +28,25 @@ output, diffs and hashes.
 
 ## Install
 
-Prebuilt binaries for Linux, macOS and Windows (x64 and arm64) are on the
-[releases page](https://github.com/TahsinArafat/WitDiff/releases). Download,
-verify against `SHA256SUMS`, and put `witdiff` on your `PATH`.
+Prebuilt binaries for Linux, macOS and Windows (x64 and arm64) are attached to
+each [release](https://github.com/TahsinArafat/WitDiff/releases), with a
+`SHA256SUMS` file.
+
+The current release is an **alpha**, so `/releases/latest/` does not resolve to
+it — GitHub's `latest` deliberately skips prereleases. Pin the tag:
 
 ```bash
-# macOS / Linux
-curl -fsSL https://github.com/TahsinArafat/WitDiff/releases/latest/download/witdiff-aarch64-apple-darwin.tar.gz \
-  | tar xz -C /usr/local/bin
+VERSION=1.0.0-alpha.1
+
+# macOS arm64; substitute your platform from the releases page
+curl -fsSLO "https://github.com/TahsinArafat/WitDiff/releases/download/v${VERSION}/witdiff-aarch64-apple-darwin.tar.gz"
+curl -fsSLO "https://github.com/TahsinArafat/WitDiff/releases/download/v${VERSION}/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS --ignore-missing
+tar xzf witdiff-aarch64-apple-darwin.tar.gz -C /usr/local/bin witdiff
 ```
+
+Verify the checksum before running it. Once a full release exists,
+`/releases/latest/` will work and the version variable can be dropped.
 
 <details>
 <summary>Other ways to install</summary>

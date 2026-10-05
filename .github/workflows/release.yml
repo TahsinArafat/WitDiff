@@ -155,6 +155,20 @@ jobs:
           echo "checksums written for $(wc -l < SHA256SUMS) archive(s)"
           cat SHA256SUMS
 
+      # A tag carrying a prerelease suffix publishes as a prerelease, so it is
+      # not offered as the "latest" download. `curl .../releases/latest/...` in
+      # the README resolves to the latest *full* release, and an alpha must not
+      # quietly become that.
+      - name: Decide whether this is a prerelease
+        id: channel
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            *-alpha*|*-beta*|*-rc*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)                      echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "tag=$tag prerelease=$([ -n "$tag" ] && echo "$tag")"
+
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
@@ -164,3 +178,7 @@ jobs:
             artifacts/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true
+          prerelease: ${{ steps.channel.outputs.prerelease }}
+          # Named so the release page says which build this is. The workflow
+          # dispatches on a tag, so the name is derived rather than typed.
+          name: ${{ github.ref_name }}
