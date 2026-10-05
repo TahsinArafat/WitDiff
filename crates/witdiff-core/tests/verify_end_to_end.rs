@@ -1779,6 +1779,142 @@ fn coverage_is_opt_in_and_never_improves_a_verdict() {
 }
 
 // ---------------------------------------------------------------------------
+// Flake detection
+// ---------------------------------------------------------------------------
+
+/// A flaky base run must not produce a proof.
+///
+/// The scenario is the dangerous one: the workspace is green, the base control
+/// is green, and the transplanted test appears to fail — but on a base that
+/// only sometimes fails. Without repeats that single sample is a proof.
+///
+/// Only the **base** run is made flaky. Flaking the workspace run yields
+/// `head_failed`, which is already non-verified, so the assertion could not
+/// distinguish a working flake guard from a deleted one. An earlier version of
+/// this test passed with the guard removed for exactly that reason.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn a_flaky_base_run_does_not_produce_a_proof() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", buggy_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    // The counter lives outside the workspace: writing it inside changes the
+    // fingerprint, which makes the evidence stale and the status `head_failed`
+    // before any flake check runs — making the test pass for the wrong reason.
+    let counter =
+        std::env::temp_dir().join(format!("witdiff-flake-counter-{}", std::process::id()));
+    let _ = fs::remove_file(&counter);
+
+    // The flake is scoped to the transplanted experiment: that is the run whose
+    // failure becomes the proof. The control also sees the buggy base, so a
+    // flake keyed only on the source hits the control first, ends the
+    // experiment before it starts, and leaves the guard under test unreached —
+    // which is why an earlier version of this test passed with that guard
+    // deleted. The transplanted regression test is the distinguishing file.
+    // The experiment is the only run that has *both* the buggy base source and
+    // the transplanted test. Keying on the test file alone also matched the
+    // workspace, which then flaked instead — the third version of this fixture
+    // that had to be corrected by measuring what it produced rather than by
+    // reasoning about what it should produce.
+    let buggy_marker = "value % 2 == 1";
+    let transplanted = "tests/regression.rs";
+    let mut config = fixture_config();
+    config.verification.test_command = vec![
+        "sh".to_owned(),
+        "-c".to_owned(),
+        format!(
+            // The flake must *suppress* the real failure on half the runs. The
+            // experiment fails genuinely on the base revision, so a flake that
+            // also failed would be indistinguishable from the real result and
+            // the instability would never be observed — which is what the
+            // previous version of this fixture did, reporting `Stable, 4`.
+            "if grep -q '{buggy_marker}' src/lib.rs 2>/dev/null && [ -f {transplanted} ]; then \
+               n=$(cat {counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {counter}; \
+               if [ $((n % 2)) -eq 1 ]; then \
+                 echo 'test result: FAILED. 0 passed; 1 failed'; exit 101; \
+               else \
+                 echo 'test result: ok. 1 passed; 0 failed'; exit 0; \
+               fi; \
+             fi; \
+             exec {cargo} test --quiet -- --test-threads=1",
+            buggy_marker = buggy_marker,
+            transplanted = transplanted,
+            cargo = CARGO,
+            counter = counter.display()
+        ),
+    ];
+    config.verification.flake_repeats = 4;
+
+    let receipt = fixture.verify(&config);
+
+    assert_ne!(
+        receipt.status,
+        VerificationStatus::Verified,
+        "a base that does not give the same answer twice must not produce a \
+         proof; notes: {:?}",
+        receipt.notes
+    );
+    assert!(
+        !receipt.red_green_proven,
+        "red/green must not be claimed when the base experiment disagreed with \
+         itself; notes: {:?}",
+        receipt.notes
+    );
+    assert!(
+        receipt.notes.iter().any(|note| note.contains("flake")),
+        "the receipt must say the result was unstable rather than leaving a bare \
+         non-verified status; notes: {:?}",
+        receipt.notes
+    );
+}
+
+/// Repeats must not change the outcome for a suite that is genuinely red.
+///
+/// The guard above could be satisfied by refusing everything. This asserts the
+/// opposite direction: a consistently failing base still yields a proof.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn repeats_do_not_suppress_a_genuine_proof() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", buggy_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    let mut config = fixture_config();
+    config.verification.flake_repeats = 3;
+
+    let receipt = fixture.verify(&config);
+
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::Verified,
+        "a deterministic failing base must still reach a proof with repeats on; \
+         notes: {:?}",
+        receipt.notes
+    );
+    assert!(receipt.red_green_proven);
+    let base = receipt.base_run.as_ref().expect("the base experiment ran");
+    assert_eq!(base.stability, witdiff_core::run::Stability::Stable);
+    assert!(
+        base.repeats > 1,
+        "a confirmed failure must record how many runs agreed, got {}",
+        base.repeats
+    );
+}
+
+// ---------------------------------------------------------------------------
 // ADR-0022: signed receipts
 // ---------------------------------------------------------------------------
 

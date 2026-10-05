@@ -405,6 +405,45 @@ accepted as evidence:
 `Timeout` is deliberately distinct from `test_failure`. A killed run is not a
 red observation, and treating it as one would manufacture proof from a hang.
 
+## Flaky suites
+
+Each side of the experiment is one sample. For a deterministic suite that is
+enough; for a flaky one it is not, because three single samples become
+`verified` when the base run happened to fail, or `head_failed` when the
+workspace run happened to fail, and nothing in the receipt says the evidence was
+one draw from an unstable distribution.
+
+`verification.flake_repeats` (default `1`, which is the previous behaviour)
+repeats a **failing** run and reports disagreement instead of evidence.
+
+Why only failures: a passing run has nothing to distinguish, and repeating it
+would double the cost of the ordinary case to learn that it still passes. A
+failure is where the two explanations — a real regression and a flake — are both
+live.
+
+Why the retained result is a failure: an unstable suite must never be readable as
+green, because a lucky pass standing as evidence is the failure this project
+exists to prevent. A false red is the safe direction — visible, and the receipt
+says why.
+
+`stability` on each run is three-valued rather than two:
+
+| Value | Meaning |
+| --- | --- |
+| `single_run` | Run once. Nothing was compared, so nothing is claimed. |
+| `stable` | Every repeat agreed. |
+| `unstable` | The repeats disagreed, so the result is not evidence for either outcome. |
+
+`single_run` is deliberately distinct from `stable`: "we ran it once and it
+failed" and "we ran it three times and it failed every time" are different
+amounts of evidence, and a receipt that merged them would overstate the first. A
+**pass** is therefore `single_run`, never `stable`, because the loop stops at the
+first success.
+
+An unstable result never reaches `verified` or `verified_with_warnings`, and
+`red_green_proven` is false. The receipt names which run was unstable and how
+many of its repeats passed.
+
 ## Evidence freshness
 
 WitDiff hashes the diff from base plus untracked changed-file content before and after verification. If the fingerprint changes, evidence is stale and a previously verified result is downgraded.

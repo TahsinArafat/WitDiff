@@ -143,6 +143,10 @@ Shipped so far in M6:
 - **Gate policy** — `[gate]` in `witdiff.toml` commits which results pass, so a
   repository states it once rather than restating flags on every invocation.
   Flags may only tighten it.
+- **Flake detection** — `verification.flake_repeats` repeats a failing run and
+  reports disagreement as unstable rather than as evidence. Only failures are
+  repeated, the retained result is the failure, and each run records whether its
+  outcome was a single sample or confirmed by agreement.
 - **Coverage of changed lines** — the receipt reports how many of the lines this
   change added the tests executed, with per-file detail.
 

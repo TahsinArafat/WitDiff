@@ -83,6 +83,17 @@ the feature list means uniform coverage.
   is implemented over `serde_json` because the official SDK requires rustc 1.88
   against this workspace's 1.78 and pulls 68 packages.
 
+### Added
+
+- **Repeated runs, so a flaky suite cannot become a proof.**
+  `verification.flake_repeats` (default 1, the previous behaviour) repeats a
+  failing run and reports disagreement as an unstable suite. Only failures are
+  repeated — a pass has nothing to distinguish — and the retained result is the
+  failure, so an unstable suite can never read as green. Each run records
+  `stability`: `single_run`, `stable` or `unstable`, three-valued because "run
+  once and it failed" and "run three times and it failed every time" are
+  different amounts of evidence.
+
 ### Fixed
 
 - **Java reached `VerifiedWithWarnings` and could never reach `Verified`.**

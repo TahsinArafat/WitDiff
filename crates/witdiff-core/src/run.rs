@@ -195,6 +195,13 @@ fn run_impl(
         result.success = false;
     }
 
+    // Carried onto the result itself, because the receipt serializes the
+    // `RunResult` rather than the outcome. Computing it only here left the
+    // receipt claiming `single_run` for a failure that had been confirmed by
+    // three agreeing runs — the field existed and never held anything.
+    result.stability = stability;
+    result.repeats = repeat_count;
+
     Ok(RunOutcome {
         result,
         repeats: repeat_count,

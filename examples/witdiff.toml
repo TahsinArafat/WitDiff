@@ -55,6 +55,19 @@ max_mutants_per_function = 5
 # Make an unsigned receipt fail a CI gate rather than pass quietly.
 # signing_failure_exit_code = 2
 
+# How many times to run a command that FAILS, to tell a real failure from a
+# flaky one.
+#
+# 1 (the default) takes a single sample, which is what earlier versions did.
+# Above 1, a failing run is repeated until it passes or the bound is reached,
+# and disagreement is reported as `unstable` rather than as evidence in either
+# direction.
+#
+# Only failures are repeated. A passing run has nothing to distinguish, and
+# repeating it would double the cost of the ordinary case to learn that it still
+# passes.
+# flake_repeats = 3
+
 # ---------------------------------------------------------------------------
 # Sandboxed execution
 # ---------------------------------------------------------------------------
