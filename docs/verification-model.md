@@ -317,6 +317,44 @@ vector that ran (`effective_test_command`). Selection never silently
 substitutes evidence: when narrowing did not happen, `test_selection` is
 `full_suite` and the reason is in `notes`.
 
+## Sandboxed execution
+
+`test_command` comes from the repository being verified, which means it comes
+from whatever changeset is under review. Running it directly executes
+candidate-controlled code on the host.
+
+Setting `verification.sandbox_image` rewrites every run — head, base control,
+base experiment, and mutants — into:
+
+```text
+docker run --rm --name <unique> --workdir <cwd> --volume <cwd>:<cwd> <image> <command>
+```
+
+The workspace is mounted at its own absolute path, so paths in the command's
+output still resolve. Paths *outside* it do not: the host toolchain, its package
+cache, and any absolute path above the workspace are absent. That is the
+isolation, and it is why the image must contain what the command needs. Which
+toolchain a project requires is not something WitDiff can infer, so the image is
+the operator's.
+
+Three properties are deliberately explicit rather than implied:
+
+- **The container is named.** Killing `docker run` stops the *client*, not the
+  container it started. On a timeout that would leave the candidate's code
+  running indefinitely — a resource leak and a long-lived instance of exactly
+  what the sandbox exists to contain. The name lets the timeout path remove it,
+  and a test asserts no container is left behind.
+- **Environment is an allow-list.** Only `WITDIFF=1` and the variables named in
+  `sandbox_env` are forwarded. Inheriting the operator's shell would put
+  credentials inside the container the sandbox is meant to be distrustful of.
+- **No sandbox is not an accident.** A configured-but-empty image is refused
+  rather than silently falling back to running on the host, because isolation
+  that reports success while doing nothing is worse than no isolation.
+
+It is opt-in: a project that cannot be containerized must still be verifiable,
+and nothing about the receipt changes apart from what `head_run.command`
+records.
+
 ## Bounded execution
 
 Each individual test command run is subject to `verification.timeout_secs`. On

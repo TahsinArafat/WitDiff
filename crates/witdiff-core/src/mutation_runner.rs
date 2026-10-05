@@ -276,6 +276,10 @@ fn run_mutants(
             config.verification.max_output_bytes,
             timeout,
             framework,
+            // Mutants run under the same sandbox as everything else: a
+            // sandboxed verification that skipped mutation would be a
+            // verification with one uncontained code path.
+            crate::runner::Sandbox::from_config(&config.verification).as_ref(),
         );
         // Restore before classifying, so a failure below cannot leave the
         // mutant in place for the next iteration.

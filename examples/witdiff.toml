@@ -56,6 +56,43 @@ max_mutants_per_function = 5
 # signing_failure_exit_code = 2
 
 # ---------------------------------------------------------------------------
+# Sandboxed execution
+# ---------------------------------------------------------------------------
+#
+# `test_command` comes from this file, which means it comes from whatever
+# changeset is under verification. Running it directly executes candidate code
+# on the host. When set, the command is rewritten to
+#
+#   docker run --rm --name <unique> --workdir <cwd> --volume <cwd>:<cwd> \
+#     <image> <command>
+#
+# so the candidate's command runs inside a container whose filesystem is just
+# the workspace.
+#
+# **The image must carry the toolchain.** WitDiff mounts the workspace and
+# nothing else: the host's toolchain, its `~/.cargo` registry, and any absolute
+# path configured above the workspace are not there. `cargo test` in a bare Rust
+# image will try to download the workspace's crates. An image with the toolchain
+# and a warmed dependency cache is the operator's job, and that is deliberate —
+# which toolchain a project needs is not something WitDiff can infer.
+#
+# Opt-in, because a project that cannot be containerized must still be
+# verifiable.
+#
+# sandbox_image = "my-project-ci:latest"
+
+# Host variables to forward into the container. An explicit allow-list: a
+# sandboxed run does not inherit the operator's shell by default, so a secret in
+# the environment stays out unless named here.
+# sandbox_env = ["DATABASE_URL"]
+
+# Allow the container to reach the network. True by default so projects that
+# fetch dependencies keep working; set false for `--network none`, which is the
+# stronger isolation and stops a candidate's test command from exfiltrating
+# anything it can read in the workspace.
+# sandbox_network = false
+
+# ---------------------------------------------------------------------------
 # Gate policy
 # ---------------------------------------------------------------------------
 #

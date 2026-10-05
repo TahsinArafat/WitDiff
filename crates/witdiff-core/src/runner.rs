@@ -37,6 +37,113 @@ impl CommandSpec {
     }
 }
 
+/// Run a command inside a container rather than on the host.
+///
+/// The container is named, because killing `docker run` kills the *client*
+/// and not the container it started. On a timeout that would leave the
+/// container running forever, which is a resource leak and a long-lived
+/// instance of the very code the sandbox exists to contain. The name is
+/// therefore kept so the timeout path can remove it.
+#[derive(Debug, Clone)]
+pub struct Sandbox {
+    /// The image to run in, as an operator would name it.
+    pub image: String,
+    /// Host environment variables to forward, by name.
+    ///
+    /// An explicit allow-list: a sandboxed run does not inherit the operator's
+    /// shell by default.
+    pub env: Vec<String>,
+    /// Whether the container may reach the network.
+    pub network: bool,
+}
+
+impl Sandbox {
+    /// Build the sandbox a configuration asks for, or `None` when it does not
+    /// ask for one.
+    ///
+    /// An image that is configured but empty is treated as no sandbox: a typo
+    /// that silently ran commands on the host would be worse than a typo that
+    /// failed loudly, so an empty value is refused by the caller instead of
+    /// being used as an image name.
+    pub fn from_config(config: &crate::config::VerificationConfig) -> Option<Self> {
+        let image = config.sandbox_image.as_ref()?.trim();
+        if image.is_empty() {
+            return None;
+        }
+        Some(Self {
+            image: image.to_owned(),
+            env: config.sandbox_env.clone(),
+            network: config.sandbox_network,
+        })
+    }
+
+    /// Rewrite a command so it runs inside this sandbox.
+    ///
+    /// The workspace is mounted at its own absolute path, so paths inside it
+    /// resolve identically in and out of the container. Paths *outside* the
+    /// workspace do not: the host's toolchain, its cargo registry, and any
+    /// absolute path configured above the workspace are not there. That is the
+    /// point of the isolation, and it is why the image must carry the
+    /// toolchain the command needs.
+    pub fn wrap(&self, spec: &CommandSpec, cwd: &Path, container: &str) -> CommandSpec {
+        let path = cwd.to_string_lossy().into_owned();
+        let mut args: Vec<String> = vec![
+            "run".into(),
+            "--rm".into(),
+            "--name".into(),
+            container.to_owned(),
+            "--workdir".into(),
+            path.clone(),
+            // The same absolute path inside, so output and any path recorded
+            // in the workspace keep working.
+            "--volume".into(),
+            format!("{path}:{path}"),
+            "--env".into(),
+            "WITDIFF=1".into(),
+        ];
+        if !self.network {
+            args.push("--network".into());
+            args.push("none".into());
+        }
+        for name in &self.env {
+            args.push("--env".into());
+            args.push(name.clone());
+        }
+        args.push(self.image.clone());
+        args.push(spec.program.clone());
+        args.extend(spec.args.iter().cloned());
+        CommandSpec {
+            program: "docker".into(),
+            args,
+        }
+    }
+}
+
+/// A container name unique to one run.
+///
+/// Not derived from the workspace path: two fixtures can share a temporary
+/// directory, and a colliding name would let one run remove the other's
+/// container.
+fn container_name() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("witdiff-{}-{sequence}", std::process::id())
+}
+
+/// Remove a container if it still exists.
+///
+/// Best-effort: a `docker` that is absent or refusing to run means the sandbox
+/// was never usable, and failing to clean up must not turn a timeout into a
+/// tool error.
+fn remove_container(name: &str) {
+    if name.is_empty() {
+        return;
+    }
+    let _ = Command::new("docker")
+        .args(["rm", "--force", name])
+        .output();
+}
+
 /// Execute a command under an optional wall-clock deadline.
 ///
 /// ## Why the pipes are drained on separate threads
@@ -65,10 +172,36 @@ pub fn run(
     max_output_bytes: usize,
     timeout: Option<Duration>,
     framework: TestFramework,
+    sandbox: Option<&Sandbox>,
 ) -> Result<RunResult> {
     if !cwd.is_dir() {
         bail!("test working directory does not exist: {}", cwd.display());
     }
+    // The container is named before anything starts so the timeout path can
+    // remove it; see `Sandbox` for why the name matters.
+    let container = sandbox.map(|_| container_name());
+    let effective = match (sandbox, &container) {
+        (Some(sandbox), Some(name)) => sandbox.wrap(spec, cwd, name),
+        _ => spec.clone(),
+    };
+    run_inner(
+        &effective,
+        cwd,
+        max_output_bytes,
+        timeout,
+        framework,
+        container.as_deref().unwrap_or_default(),
+    )
+}
+
+fn run_inner(
+    spec: &CommandSpec,
+    cwd: &Path,
+    max_output_bytes: usize,
+    timeout: Option<Duration>,
+    framework: TestFramework,
+    container: &str,
+) -> Result<RunResult> {
     let started = Instant::now();
     let mut child = Command::new(&spec.program)
         .args(&spec.args)
@@ -105,6 +238,10 @@ pub fn run(
             Err(_) => {
                 timed_out = true;
                 terminate(pid);
+                // Killing the client does not stop the container, so remove it
+                // explicitly. Otherwise a timed-out run leaves the code the
+                // sandbox is meant to contain running on the host indefinitely.
+                remove_container(container);
                 // Reap the killed child so it does not linger as a zombie. The
                 // wait already succeeded on the kill signal; if this second
                 // receive also times out the process group is wedged beyond
@@ -281,6 +418,7 @@ mod tests {
             4096,
             Some(Duration::from_secs(30)),
             TestFramework::Cargo,
+            None,
         )
         .expect("run should succeed");
         assert!(result.success);
@@ -297,6 +435,7 @@ mod tests {
             4096,
             Some(Duration::from_secs(30)),
             TestFramework::Cargo,
+            None,
         )
         .expect("run should complete");
         assert!(!result.success);
@@ -313,6 +452,7 @@ mod tests {
             4096,
             Some(Duration::from_secs(5)),
             TestFramework::Cargo,
+            None,
         )
         .expect_err("a missing program must be an explicit error");
         assert!(
@@ -336,6 +476,7 @@ mod tests {
             4096,
             Some(Duration::from_millis(700)),
             TestFramework::Cargo,
+            None,
         )
         .expect("a timeout is reported, not raised as a tool error");
 
@@ -361,6 +502,7 @@ mod tests {
             4096,
             Some(Duration::from_secs(60)),
             TestFramework::Cargo,
+            None,
         )
         .expect("large output must be drained, not deadlock");
 
@@ -374,9 +516,275 @@ mod tests {
     #[test]
     fn no_timeout_configured_still_completes() {
         let cwd = std::env::temp_dir();
-        let result = run(&spec("true", &[]), &cwd, 4096, None, TestFramework::Cargo)
-            .expect("run should succeed");
+        let result = run(
+            &spec("true", &[]),
+            &cwd,
+            4096,
+            None,
+            TestFramework::Cargo,
+            None,
+        )
+        .expect("run should succeed");
         assert!(result.success);
         assert!(!result.timed_out);
+    }
+
+    // ---------------------------------------------------------------------
+    // Sandboxed execution
+    // ---------------------------------------------------------------------
+
+    fn sandbox_image() -> Option<String> {
+        let image =
+            std::env::var("WITDIFF_TEST_IMAGE").unwrap_or_else(|_| "alpine:3.19".to_owned());
+        // A missing docker or a missing image means the assertion cannot be
+        // made, not that it passed.
+        match Command::new("docker")
+            .args(["image", "inspect", &image])
+            .output()
+        {
+            Ok(output) if output.status.success() => Some(image),
+            _ => {
+                eprintln!("docker or the image {image} is unavailable; skipping");
+                None
+            }
+        }
+    }
+
+    /// The command must become a container run. Asserted without docker,
+    /// because the shape is what the configuration promises.
+    #[test]
+    fn a_sandbox_rewrites_the_command_into_a_container_run() {
+        let sandbox = Sandbox {
+            image: "alpine:3.19".to_owned(),
+            env: vec!["DATABASE_URL".to_owned()],
+            network: false,
+        };
+        let cwd = std::path::Path::new("/workspace/project");
+        let spec = CommandSpec::from_vec(vec!["cargo".into(), "test".into()]).expect("spec");
+        let wrapped = sandbox.wrap(&spec, cwd, "witdiff-test-1");
+
+        assert_eq!(wrapped.program, "docker");
+        assert_eq!(wrapped.args[0], "run");
+        // Named, so a timeout can remove it rather than leaving it running.
+        let name_at = wrapped
+            .args
+            .iter()
+            .position(|a| a.as_str() == "--name")
+            .expect("--name");
+        assert_eq!(wrapped.args[name_at + 1], "witdiff-test-1");
+        // Mounted at its own absolute path, so paths in output still resolve.
+        let volume_at = wrapped
+            .args
+            .iter()
+            .position(|a| a.as_str() == "--volume")
+            .expect("--volume");
+        assert_eq!(
+            wrapped.args[volume_at + 1],
+            "/workspace/project:/workspace/project"
+        );
+        let workdir_at = wrapped
+            .args
+            .iter()
+            .position(|a| a.as_str() == "--workdir")
+            .expect("--workdir");
+        assert_eq!(wrapped.args[workdir_at + 1], "/workspace/project");
+        // The allow-listed variable is forwarded alongside the marker.
+        let envs = wrapped
+            .args
+            .iter()
+            .filter(|a| a.as_str() == "--env")
+            .count();
+        assert_eq!(envs, 2, "WITDIFF plus DATABASE_URL");
+        assert!(wrapped.args.iter().any(|a| a.as_str() == "DATABASE_URL"));
+        assert!(wrapped.args.iter().any(|a| a.as_str() == "none"));
+        // The original command follows the image, unmodified.
+        assert_eq!(wrapped.args[wrapped.args.len() - 2], "cargo");
+        assert_eq!(wrapped.args[wrapped.args.len() - 1], "test");
+    }
+
+    /// Network on by default so a project that fetches dependencies keeps
+    /// working, and off only when asked.
+    #[test]
+    fn network_is_on_by_default_and_off_only_when_asked() {
+        let cwd = std::path::Path::new("/w");
+        let spec = CommandSpec::from_vec(vec!["true".into()]).expect("spec");
+
+        let open = Sandbox {
+            image: "a".into(),
+            env: Vec::new(),
+            network: true,
+        };
+        let wrapped = open.wrap(&spec, cwd, "c1");
+        assert!(!wrapped.args.iter().any(|a| a.as_str() == "--network"));
+
+        let closed = Sandbox {
+            image: "a".into(),
+            env: Vec::new(),
+            network: false,
+        };
+        let wrapped = closed.wrap(&spec, cwd, "c2");
+        assert!(wrapped.args.iter().any(|a| a.as_str() == "--network"));
+    }
+
+    /// An image is required. Configuring a sandbox that silently does nothing
+    /// would be the worst outcome: isolation that reports success.
+    #[test]
+    fn no_image_means_no_sandbox() {
+        let mut config = crate::config::VerificationConfig::default();
+        assert!(Sandbox::from_config(&config).is_none());
+
+        config.sandbox_image = Some(String::new());
+        assert!(
+            Sandbox::from_config(&config).is_none(),
+            "an empty image must not be treated as a sandbox"
+        );
+
+        config.sandbox_image = Some("  ".to_owned());
+        assert!(Sandbox::from_config(&config).is_none());
+
+        config.sandbox_image = Some("alpine:3.19".to_owned());
+        config.sandbox_env = vec!["A".to_owned()];
+        config.sandbox_network = false;
+        let sandbox = Sandbox::from_config(&config).expect("configured image");
+        assert_eq!(sandbox.image, "alpine:3.19");
+        assert_eq!(sandbox.env, vec!["A".to_owned()]);
+        assert!(!sandbox.network);
+    }
+
+    /// Two fixtures can share a temporary directory, so a name derived from the
+    /// path could collide and let one run remove the other's container.
+    #[test]
+    fn container_names_do_not_collide() {
+        let names: Vec<String> = (0..50).map(|_| container_name()).collect();
+        let unique: std::collections::HashSet<&String> = names.iter().collect();
+        assert_eq!(unique.len(), names.len());
+        for name in &names {
+            assert!(name.starts_with("witdiff-"), "identifiable prefix: {name}");
+        }
+    }
+
+    /// A sandboxed command really runs in the container rather than the host.
+    #[test]
+    #[ignore = "end-to-end: spawns docker; run with -- --ignored"]
+    fn a_sandboxed_command_runs_inside_the_container() {
+        let Some(image) = sandbox_image() else { return };
+        let cwd = std::env::temp_dir();
+        let sandbox = Sandbox {
+            image,
+            env: Vec::new(),
+            network: true,
+        };
+        let result = run(
+            &spec("sh", &["-c", "test -f /etc/os-release || exit 7"]),
+            &cwd,
+            4096,
+            Some(Duration::from_secs(60)),
+            TestFramework::Cargo,
+            Some(&sandbox),
+        )
+        .expect("the docker client should run");
+
+        assert!(
+            result.success,
+            "the command must run in the container, got: {}",
+            result.stderr
+        );
+        assert_eq!(
+            result.command[0], "docker",
+            "the receipt must record what actually ran"
+        );
+    }
+
+    /// A timed-out run must not leave a container behind. Killing `docker run`
+    /// stops the client, not the container, so the code the sandbox exists to
+    /// contain would otherwise keep running on the host indefinitely.
+    #[test]
+    #[ignore = "end-to-end: spawns docker; run with -- --ignored"]
+    fn a_timed_out_sandboxed_run_leaves_no_container_behind() {
+        let Some(image) = sandbox_image() else { return };
+        let cwd = std::env::temp_dir();
+        let sandbox = Sandbox {
+            image,
+            env: Vec::new(),
+            network: true,
+        };
+
+        let before = container_ids();
+
+        let result = run(
+            &spec("sleep", &["60"]),
+            &cwd,
+            4096,
+            Some(Duration::from_millis(700)),
+            TestFramework::Cargo,
+            Some(&sandbox),
+        )
+        .expect("a timeout is reported, not raised as a tool error");
+        assert!(result.timed_out, "the run must be marked timed out");
+
+        // Removal is not instantaneous; give it a moment to disappear.
+        let mut leftover = container_ids();
+        for _ in 0..20 {
+            if leftover.difference(&before).count() == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            leftover = container_ids();
+        }
+        let leaked: Vec<_> = leftover.difference(&before).collect();
+        assert!(
+            leaked.is_empty(),
+            "a timed-out sandboxed run must remove its container; leaked {leaked:?}"
+        );
+    }
+
+    /// `--network none` really removes egress.
+    #[test]
+    #[ignore = "end-to-end: spawns docker; run with -- --ignored"]
+    fn a_closed_sandbox_has_no_network() {
+        let Some(image) = sandbox_image() else { return };
+        let cwd = std::env::temp_dir();
+        let sandbox = Sandbox {
+            image,
+            env: Vec::new(),
+            network: false,
+        };
+
+        let result = run(
+            &spec(
+                "sh",
+                &[
+                    "-c",
+                    "wget -q -T 5 -O - https://example.com >/dev/null 2>&1",
+                ],
+            ),
+            &cwd,
+            4096,
+            Some(Duration::from_secs(30)),
+            TestFramework::Cargo,
+            Some(&sandbox),
+        )
+        .expect("the docker client should run");
+
+        assert!(
+            !result.success,
+            "network access must be refused when disabled; got exit {:?}",
+            result.exit_code
+        );
+    }
+
+    /// Ids of witdiff containers that currently exist, so a leak is visible.
+    fn container_ids() -> std::collections::HashSet<String> {
+        let Ok(output) = Command::new("docker")
+            .args(["ps", "-q", "-a", "--filter", "name=witdiff-"])
+            .output()
+        else {
+            return std::collections::HashSet::new();
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::to_owned)
+            .collect()
     }
 }

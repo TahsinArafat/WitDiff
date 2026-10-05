@@ -14,7 +14,7 @@ use crate::{
         RefusedInlineTests, RunResult, Severity, SplicedInlineTests, TestSelection,
         VerificationStatus,
     },
-    runner::{run, CommandSpec},
+    runner::{run, CommandSpec, Sandbox},
     rustanalysis::analyze_rust_test_change,
     selection::{build_targeted_command, SelectionOutcome},
 };
@@ -109,6 +109,9 @@ pub fn verify_repository(
 
     let timeout = config.verification.timeout_secs.map(Duration::from_secs);
     let framework = config.verification.framework()?;
+    // Built once: head, control and experiment must be sandboxed identically,
+    // or the three runs would not be comparable.
+    let sandbox = Sandbox::from_config(&config.verification);
     // A test command that cannot start must not discard the run: the receipt
     // still carries every integrity finding, which was computed before this
     // point and does not depend on the command (ADR-0019).
@@ -119,6 +122,7 @@ pub fn verify_repository(
         config.verification.max_output_bytes,
         timeout,
         framework,
+        sandbox.as_ref(),
     ) {
         Ok(result) => result,
         Err(error) => {
@@ -183,6 +187,7 @@ pub fn verify_repository(
             config.verification.max_output_bytes,
             timeout,
             framework,
+            sandbox.as_ref(),
         );
         let experiment_result = match control_result {
             Ok(control) if control.success => {
@@ -245,6 +250,7 @@ pub fn verify_repository(
                             config.verification.max_output_bytes,
                             timeout,
                             framework,
+                            sandbox.as_ref(),
                         )?,
                         blocked_tests,
                         spliced,

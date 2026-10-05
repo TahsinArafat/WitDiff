@@ -50,6 +50,36 @@ pub struct VerificationConfig {
     /// never satisfy a proof. A hung suite is a fact about the candidate, not a
     /// WitDiff malfunction, so it is reported rather than allowed to block.
     pub timeout_secs: Option<u64>,
+    /// Run the test command inside a container instead of on the host.
+    ///
+    /// When set to an image name, the command is rewritten to
+    /// `docker run --rm --name <unique> --workdir <cwd> --volume <cwd>:<cwd>
+    /// <image> <command>`. The workspace is mounted at its own absolute path so
+    /// that paths in the command's output still resolve.
+    ///
+    /// This is opt-in because the container must contain whatever the test
+    /// command needs — the toolchain, and the dependency cache. `cargo test` in
+    /// a bare Rust image downloads the workspace's crates; a project with no
+    /// network and no preloaded registry will fail. Isolation is therefore a
+    /// property the image has to provide, not something WitDiff can promise
+    /// from the image's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_image: Option<String>,
+    /// Host environment variable names to forward into the container.
+    ///
+    /// An explicit allow-list rather than forwarding everything: a sandboxed
+    /// run should not inherit the operator's shell by default. Empty means
+    /// nothing is forwarded beyond the `WITDIFF=1` marker.
+    #[serde(default)]
+    pub sandbox_env: Vec<String>,
+    /// Whether the container may reach the network.
+    ///
+    /// Defaults to true so that a project which fetches dependencies keeps
+    /// working. Set false to run with `--network none`, which is the stronger
+    /// isolation and the one that prevents a candidate's test command from
+    /// exfiltrating anything.
+    #[serde(default = "default_true")]
+    pub sandbox_network: bool,
     /// Whether to mutate the changed production code and observe the tests.
     ///
     /// Off by default: each mutant costs a full test run (ADR-0011). Mutation is
@@ -96,6 +126,10 @@ fn default_max_mutants() -> usize {
 
 fn default_max_mutants_per_function() -> usize {
     5
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl VerificationConfig {
@@ -151,6 +185,9 @@ impl Default for VerificationConfig {
             // smaller claim, so it stays opt-in for v1. Enable it per
             // repository once the full-suite path is understood.
             targeted_test_selection: false,
+            sandbox_image: None,
+            sandbox_env: Vec::new(),
+            sandbox_network: true,
             max_output_bytes: 16_384,
             // Generous by default so a cold CI build is not mistaken for a hang,
             // while still bounding a truly stuck suite.
