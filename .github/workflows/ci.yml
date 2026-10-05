@@ -13,9 +13,80 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - name: Install the parsers the JavaScript analyzer requires
+        # WitDiff never bundles a parser; it requires the one the project
+        # installs (ADR-0021). Without this the JavaScript tests silently skip
+        # rather than fail, which would leave the gap open on every PR.
+        run: npm ci
+
+      - name: Install RSpec
+        # The Ruby analyzer itself needs only `ripper` from the standard
+        # library, but the end-to-end proof runs a real RSpec.
+        run: gem install rspec --no-document
+
+      - name: Install pytest
+        run: python3 -m pip install --quiet pytest
+
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace --all-features
+
+      # The tests that prove the analyzers work against real parsers and real
+      # runners are `#[ignore]`d so a plain `cargo test` stays fast and offline.
+      # Running them here is what stops that work from silently rotting: a
+      # change that breaks the JavaScript or Ruby analyzer cannot merge.
+      #
+      # `--test-threads=1` because several fixtures write into a shared
+      # temporary tool directory.
+      - name: Test against real toolchains
+        run: cargo test --workspace --all-features -- --ignored --test-threads=1
+
+      # The JavaScript end-to-end proof needs a JUnit 5 platform, which this
+      # job does not otherwise have. Without it the Java test skips, so the
+      # path that found the Java bugs would not be exercised here.
+      - name: Install JUnit 5
+        run: |
+          mkdir -p "$HOME/junit"
+          platform="https://repo1.maven.org/maven2/org/junit/platform"
+          jupiter="https://repo1.maven.org/maven2/org/junit/jupiter"
+          # Jupiter lives under org/junit/jupiter, the platform under
+          # org/junit/platform. Using one base for both 404s.
+          for artifact in \
+            "$platform/junit-platform-engine/1.10.2/junit-platform-engine-1.10.2.jar" \
+            "$platform/junit-platform-commons/1.10.2/junit-platform-commons-1.10.2.jar" \
+            "$platform/junit-platform-launcher/1.10.2/junit-platform-launcher-1.10.2.jar" \
+            "$jupiter/junit-jupiter-engine/5.10.2/junit-jupiter-engine-5.10.2.jar" \
+            "$jupiter/junit-jupiter-api/5.10.2/junit-jupiter-api-5.10.2.jar" \
+            "https://repo1.maven.org/maven2/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar" \
+            "https://repo1.maven.org/maven2/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar" \
+          ; do
+            curl --fail --silent --show-error --location "$artifact" \
+              --output "$HOME/junit/$(basename "$artifact")"
+          done
+          ls "$HOME/junit"
+
+      - name: Test Java against a real JUnit
+        env:
+          # The fixture discovers a JUnit runtime from `~/.m2` or a VS Code
+          # extension directory; this points it at the directory just populated.
+          WITDIFF_JUNIT_JARS: /home/runner/junit
+        run: cargo test -p witdiff-core --test verify_languages_end_to_end -- --ignored --test-threads=1 java_reaches
