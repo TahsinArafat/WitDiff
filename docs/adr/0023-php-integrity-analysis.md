@@ -146,6 +146,29 @@ could not start". **Recorded as an open gap, not fixed here** — fixing it mean
 changing what the base experiment executes, which is a semantic decision about
 verification rather than a language addition.
 
+## Dogfooding
+
+WitDiff was run on its own repository. Reviewing this ADR's commits, it
+reported three things, all correct:
+
+- **`base_incompatible` on a commit that mixed production and test changes.**
+  The changed test calls `base_dependency_dirs`, which does not exist on the
+  base revision, so the transplanted test fails to compile. The receipt said so
+  and advised splitting the change. The commit was split: production first, then
+  the tests.
+- **`ignored_test` (high) on three newly added `#[ignore]`d end-to-end tests.**
+  Correct, not a false positive: they are new tests, and they are ignored. The
+  end-to-end convention in this repository is to `#[ignore]` a test that spawns
+  another toolchain, so the finding is a true statement about the commit.
+- **`not_verified` on the test-only commit**, with the note "changed tests also
+  pass on the base revision; they do not prove the behavioral change". Also
+  correct, and the point of the whole exercise: an `#[ignore]`d test cannot
+  prove anything, because the transplanted run does not execute it. The tool
+  declined to call its own work verified when it could not demonstrate it.
+
+The last one is the argument for the product stated by the product. A weaker
+tool would have seen a green suite and reported success.
+
 ## Evidence
 
 Run against PHP 8.5.9, PHPUnit 10.5.66 and Pest 3, on real repositories created
