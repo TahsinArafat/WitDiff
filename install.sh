@@ -249,4 +249,10 @@ echo "Next:"
 echo "  witdiff doctor                      # check the toolchain is usable"
 echo "  integrations/install.sh             # wire it into your coding agent"
 echo
-echo "To remove: $0 --uninstall"
+# $0 is the interpreter (often `sh`) when this is piped into a shell, so the
+# hint names the downloaded script rather than trusting $0.
+if [ -f "$0" ]; then
+  echo "To remove: $0 --uninstall"
+else
+  echo "To remove: install.sh --uninstall   (keep a copy of this script to reuse it)"
+fi
