@@ -4,6 +4,51 @@
 
 Nothing yet.
 
+## 1.0.0-alpha.2
+
+Installing works. The first alpha's installers were broken in ways only running
+them revealed, and this fixes those along with two verification gaps.
+
+### Fixed
+
+- **`curl ... | sh` installed nothing.** When a script is piped into a shell,
+  `$0` is the interpreter, so the integrations installer looked for its packages
+  beside `/bin`, found none, copied nothing, and **exited 0** — a success report
+  for an install that did not happen. It now detects that its own directory lacks
+  the packages and fetches them.
+- **The binary installer never handled Windows.** `detect_target` had Linux and
+  Darwin branches only, so a Windows user under Git Bash was told there was no
+  prebuilt binary, for a platform the release publishes.
+- **Pi recorded a deleted path.** A piped install gave Pi a temporary directory
+  that the cleanup trap removed, so the recorded source resolved to nothing the
+  moment the install finished. It now uses a stable git source.
+- **The uninstall hint named a temporary path**, in the one message whose purpose
+  is telling someone how to undo an install.
+- **`stability` was computed and never written to the receipt.** `run_impl`
+  classified the outcome on `RunOutcome` while the receipt serializes the
+  `RunResult`, so the field existed and always held its default.
+- **`red_green_proven` was set before any stability check**, claiming a proof from
+  a run that could have been a flake.
+
+### Added
+
+- **Real installers, with uninstall.** `install.sh` fetches the release for the
+  current platform, verifies it against `SHA256SUMS`, and fails closed on a
+  mismatch. It falls back across `sha256sum`, `shasum` and `openssl` so no single
+  platform's tooling is required, never uses `sudo`, and reports an unwritable
+  destination rather than escalating.
+- **Harness detection.** The integrations installer now installs only the
+  harnesses found on `PATH`, with `WITDIFF_INSTALL_ALL=1` to force every one.
+  Finding none installs all of them, because "not on my PATH" is not "not used".
+- **Uninstall for both installers.** Removals are aimed only at paths the
+  installer created, and shared directories are emptied with `rmdir` so a skill
+  you wrote yourself survives.
+- **Repeated runs, so a flaky suite cannot become a proof.**
+  `verification.flake_repeats` (default 1, the previous behaviour) repeats a
+  failing run and reports disagreement as unstable. Only failures are repeated,
+  the retained result is the failure, and each run records `stability` as
+  `single_run`, `stable` or `unstable`.
+
 ## 1.0.0-alpha.1
 
 First prebuilt release. The proof semantics are unchanged from 1.0.0; what this
