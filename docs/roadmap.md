@@ -99,8 +99,17 @@ Still open:
   the receipt says `full_suite`.
 - **Mutation** outside Rust; the operators are defined over Rust syntax.
 
-See `docs/support-matrix.md` for the per-language detail, including what Java,
-.NET, PHP, Ruby and TypeScript would each require.
+- **Gitignored dependencies in the base worktree.** The base experiment runs in
+  a `git worktree`, which contains only committed files. A project whose
+  dependencies are gitignored (`vendor/`, `node_modules/`, `.venv/`) therefore
+  cannot start its test command on the base revision, and the receipt reports
+  `base control: FAIL` — which reads as "the base is broken" rather than "the
+  base could not start". Affects every language; measured on PHP. Fixing it
+  means deciding what the base experiment executes, which is a semantic change
+  to verification rather than a language addition.
+
+See `docs/support-matrix.md` for the per-language detail, including what .NET
+and TypeScript would each require. PHP shipped in ADR-0023.
 
 ## M5 — ecosystem integrations
 

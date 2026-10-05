@@ -29,3 +29,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
 - ADR-0021: JavaScript integrity analysis uses the parser the project installs
 - ADR-0022: signatures are Ed25519 tamper-evidence over the status and the
   digest, with an operator-supplied key that WitDiff never stores
+- ADR-0023: PHP integrity analysis uses `token_get_all` from the standard
+  library, covering both PHPUnit methods and Pest closures

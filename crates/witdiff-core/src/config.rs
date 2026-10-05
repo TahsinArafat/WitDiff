@@ -368,6 +368,39 @@ impl Config {
             return config;
         }
 
+        // PHP before JavaScript: a WordPress plugin commonly ships a
+        // package.json for its build tooling while its tests are PHPUnit or
+        // Pest, so package.json is the weaker signal.
+        if any_exists(&[
+            "composer.json",
+            "phpunit.xml",
+            "phpunit.xml.dist",
+            "pest.php",
+        ]) || exists("phpunit")
+            || exists("vendor/bin/phpunit")
+        {
+            config.project.language = "php".into();
+            let uses_pest = exists("pest.php") || exists("tests/Pest.php");
+            config.verification.framework = if uses_pest { "pest" } else { "phpunit" }.into();
+            // Use a committed binary when one exists; otherwise name the
+            // installed tool, which is what a developer without Composer's
+            // vendor directory would run.
+            let local_phpunit = exists("vendor/bin/phpunit") || exists("phpunit");
+            config.verification.test_command = if local_phpunit {
+                vec!["php".into(), "vendor/bin/phpunit".into()]
+            } else {
+                vec!["phpunit".into()]
+            };
+            config.verification.test_globs = vec![
+                "tests/**/*Test.php".into(),
+                "tests/**/*.php".into(),
+                "**/*Test.php".into(),
+                "**/tests/**/*.php".into(),
+            ];
+            config.verification.extra_test_paths = vec!["tests".into()];
+            return config;
+        }
+
         if any_exists(&["package.json"]) {
             config.project.language = "javascript".into();
             config.verification.framework = "javascript".into();

@@ -47,9 +47,9 @@ between two revisions; step 8 is a hash.
 - HEAD, pristine-base control and base-plus-tests runs, each with a bounded
   timeout
 - framework-specific failure classification: cargo, pytest, Jest/Vitest, Go,
-  Java and Ruby
-- structural test-integrity analysis for Rust, Python, Go, Java, Ruby and
-  JavaScript/TypeScript, sharing one rule engine
+  Java, Ruby and PHP
+- structural test-integrity analysis for Rust, Python, Go, Java, Ruby,
+  JavaScript/TypeScript and PHP, sharing one rule engine
 - NUL-delimited Git path handling, so a non-ASCII path is classified correctly
 - workspace evidence fingerprinting that distinguishes build output from a real
   source change

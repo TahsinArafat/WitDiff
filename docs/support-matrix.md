@@ -16,16 +16,16 @@ Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
 
 ## Matrix
 
-| | Rust | Python | Go | Java | Ruby | JS/TS |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Red/green proof** | yes | yes | yes | yes | yes | yes |
-| Failure classification | yes | yes | yes | yes | yes | yes |
-| Compile-error vs test-failure | yes | yes | yes | yes | yes | yes |
-| **Integrity findings (structural)** | yes | yes | yes | yes | **yes** | **yes*** |
-| Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a | n/a | n/a |
-| **Mutation analysis** | yes | no | no | no | no | no |
-| Targeted test selection | yes | no | no | no | no | no |
-| `init` project detection | yes | yes | yes | yes | yes | yes |
+| | Rust | Python | Go | Java | Ruby | JS/TS | PHP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Red/green proof** | yes | yes | yes | yes | yes | yes | **yes** |
+| Failure classification | yes | yes | yes | yes | yes | yes | **yes** |
+| Compile-error vs test-failure | yes | yes | yes | yes | yes | yes | **yes** |
+| **Integrity findings (structural)** | yes | yes | yes | yes | **yes** | **yes*** | **yes** |
+| Inline `#[cfg(test)]` transplant | yes | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Mutation analysis** | yes | no | no | no | no | no | no |
+| Targeted test selection | yes | no | no | no | no | no | no |
+| `init` project detection | yes | yes | yes | yes | yes | yes | **yes** |
 
 JavaScript and TypeScript need a parser *in the project*, because Node ships
 none. A Jest or Vitest project already has one — see the section below.
@@ -218,6 +218,74 @@ analyzer compares `macro_name`. Fixed in `testshape`, so all languages get it.
 run against both. Measured: the two parsers produce byte-identical summaries
 for the same source, which is what makes one traversal trustworthy for both.
 
+## PHP: PHPUnit and Pest (ADR-0023)
+
+`token_get_all` ships in every PHP installation, so the summary tool needs no
+Composer dependency — the same reasoning as Ruby's `ripper` and Python's `ast`.
+
+It is a **tokenizer, not a parser**, so there is no tree to walk. Brace depth is
+tracked instead: a PHPUnit method body opens at the first `{` after its
+parameter list, and a Pest example body at the first `{` inside the call's
+parentheses.
+
+**Both assertion styles are normalized to subject-first.** PHPUnit writes
+`assertEquals(expected, actual)` and Pest writes `expect($x)->toBe($y)`; the tool
+swaps them so the shared rule engine compares like with like. Without the swap,
+every expectation change reads as a removal plus an addition rather than as a
+change.
+
+### Three shapes that were read from the token stream, not assumed
+
+Each of these was a bug in an earlier revision, found by running the tool
+against PHP 8.5 and Pest 3 rather than by reading the code:
+
+- **`->` is one token, not two.** PHP 8 emits `T_OBJECT_OPERATOR`; an
+  implementation that scans for `-` then `>` finds nothing.
+- **A Pest closure body sits *inside* the call's parentheses**, because the
+  closure is an argument. Scanning past the call's closing `)` for the body
+  finds nothing.
+- **A subject can contain its own `->`.** For `expect((new Calc(1,2))->add())->toBe(3)`,
+  matching the first `T_OBJECT_OPERATOR` reads the *subject's* method as the
+  expectation's matcher. The chain scan therefore starts at the end of the
+  `expect(...)` argument list.
+
+### Failure classification is measured against real runners
+
+PHPUnit 10.5.66 and Pest 3 print different things, and the differences matter:
+
+| Case | PHPUnit 10 | Pest 3 |
+| --- | --- | --- |
+| Assertion failure | `FAILURES!` + `Tests: 2, …, Failures: 1.` | `Tests:    1 failed, 1 passed` — **no `FAILURES!`** |
+| Thrown error | `ERRORS!` + `Errors: 1.` | `Tests:    1 failed (0 assertions)` |
+| Unparsable file | `An error occurred inside PHPUnit.` + `syntax error`, exit 255 | — |
+| Passing | `OK (2 tests, 2 assertions)`, no `Tests:` line | `Tests:    1 passed` |
+| All skipped | `Tests: 1, …, Skipped: 1.`, **exit 0** | `Tests:    1 skipped`, exit 0 |
+
+The Pest row is load-bearing: a Pest test that errors on something other than an
+assertion prints neither `FAILURES!` nor `failed asserting that`, so without the
+count line it classified as `CommandFailure` — which cannot produce a proof, so
+Pest projects silently lost their red/green evidence.
+
+### Dependencies must be present at the base revision
+
+The base experiment runs in a `git worktree`, which contains only committed
+files. `vendor/` is conventionally gitignored, so the base control run fails
+with `Could not open input file: vendor/bin/phpunit` and the receipt reports
+`base control: FAIL` — which reads as "the base is broken" rather than "the base
+could not start".
+
+This is **not PHP-specific**: `node_modules/`, `.venv/` and any other
+gitignored dependency directory behave the same way. The remedy is to make the
+dependencies reachable from the base worktree.
+
+### PHPUnit writes files on every run
+
+`.phpunit.result.cache` (repo root) and Pest's
+`vendor/pestphp/pest/.temp/test-results` are created by the act of running the
+suite. Both are classified as build output, because failing a freshness gate
+over the suite's own scratch files reports a test run as evidence that the
+source under verification had moved.
+
 ## Other languages: assessment, not support
 
 These were checked directly on this machine. None is supported; the point is to
@@ -227,7 +295,7 @@ than guessed.
 | Language | Parser available without extra install? | What it would take |
 | --- | --- | --- |
 | **TypeScript** | No — needs `typescript` in `node_modules` | Same problem as JavaScript. A TS project using Vitest does have `typescript` installed, so this is more tractable than plain JS |
-| **PHP** | Partially — `token_get_all` always ships; `ext-ast` does not | The tokenizer gives tokens, not a tree. Enough for line-based rules, not for the structural comparison the other languages get |
+| ~~PHP~~ | — | ~~Not enough for structural comparison~~ — **shipped as ADR-0023.** See the PHP section below; the assessment below was measured and rejected |
 | **.NET / C#** | Yes — Roslyn ships with the SDK | Feasible in principle, but Roslyn is a large API and the analysis would likely need a helper project rather than a single portable source file |
 | **ASP / ASP.NET** | n/a | A framework, not a test language. ASP.NET tests are xUnit/NUnit/MSTest, which are C# and covered by the .NET row |
 

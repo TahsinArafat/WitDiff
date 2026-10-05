@@ -179,12 +179,13 @@ See [`demo/`](demo) for the agent-driven version, including a real Pi session.
 ## What it checks
 
 **Red/green proof** — the core claim, for Rust, Python (pytest), Go,
-Java (JUnit), Ruby (Minitest, RSpec) and JavaScript/TypeScript (Jest, Vitest).
+Java (JUnit), Ruby (Minitest, RSpec), JavaScript/TypeScript (Jest, Vitest) and
+PHP (PHPUnit, Pest).
 
 **Test-integrity findings** — a change that weakens its own tests is reported:
 removed or trivialized assertions, changed expectations, newly skipped tests,
 removed error checks, removed `match` arms. Structural, through a real parser
-for all six languages.
+for all seven languages.
 
 **Supplementary evidence**, neither of which changes the verdict:
 

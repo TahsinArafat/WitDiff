@@ -49,6 +49,8 @@ pub enum TestFramework {
     Java,
     /// Minitest and RSpec.
     Ruby,
+    /// PHPUnit and Pest.
+    Php,
 }
 
 impl TestFramework {
@@ -61,6 +63,7 @@ impl TestFramework {
             TestFramework::Go => "go",
             TestFramework::Java => "java",
             TestFramework::Ruby => "ruby",
+            TestFramework::Php => "php",
         }
     }
 
@@ -77,12 +80,13 @@ impl TestFramework {
             "go" | "gotest" | "go test" => Some(TestFramework::Go),
             "java" | "junit" | "maven" | "mvn" | "gradle" => Some(TestFramework::Java),
             "ruby" | "minitest" | "rspec" | "rake" => Some(TestFramework::Ruby),
+            "php" | "phpunit" | "pest" => Some(TestFramework::Php),
             _ => None,
         }
     }
 
     /// Every framework WitDiff can classify, for diagnostics.
-    pub fn all() -> [TestFramework; 6] {
+    pub fn all() -> [TestFramework; 7] {
         [
             TestFramework::Cargo,
             TestFramework::Pytest,
@@ -90,6 +94,7 @@ impl TestFramework {
             TestFramework::Go,
             TestFramework::Java,
             TestFramework::Ruby,
+            TestFramework::Php,
         ]
     }
 
@@ -188,6 +193,18 @@ impl TestFramework {
                     || lower.contains("<<< failure!")
                     || lower.contains("tests completed, ") && lower.contains(" failed")
             }
+            TestFramework::Php => {
+                // Measured against PHPUnit 10.5.66. A failing assertion prints
+                // `There was 1 failure:` and ends with `FAILURES!`; a thrown
+                // exception prints `ERRORS!`. Both carry a non-zero count on the
+                // `Tests: N, Assertions: N, Failures: F, Errors: E` summary
+                // line, which is what the count helper keys on.
+                has_phpunit_failure_count(lower)
+                    || lower.contains("failures!")
+                    || lower.contains("errors!")
+                    || lower.contains(") failure:")
+                    || lower.contains("failed asserting that")
+            }
         }
     }
 
@@ -233,8 +250,78 @@ impl TestFramework {
                     || lower.contains("cannot find symbol")
                     || lower.contains("error: ';' expected")
             }
+            TestFramework::Php => {
+                // Measured: PHPUnit 10 reports a file it cannot parse as
+                // `An error occurred inside PHPUnit.` with
+                // `Message:  syntax error, ...` and exits 255, printing no
+                // summary line at all. A missing class or trait is the other
+                // way a suite fails before any test runs.
+                lower.contains("an error occurred inside phpunit")
+                    || lower.contains("syntax error")
+                    || lower.contains("parse error")
+                    || lower.contains("fatal error")
+                    || lower.contains("could not find class")
+                    || lower.contains("class \"") && lower.contains("not found")
+            }
         }
     }
+}
+
+/// Whether PHPUnit or Pest reports a non-zero failure or error count.
+///
+/// The two runners share a `Tests:` prefix and nothing else, which is why this
+/// exists rather than two substring checks:
+///
+/// - PHPUnit 10.5.66: `Tests: 2, Assertions: 2, Failures: 1.`
+/// - Pest 3: `Tests:    1 failed, 1 passed (2 assertions)`
+///
+/// The Pest form is load-bearing. Measured against real Pest, a test that
+/// errors on something other than an assertion prints neither `FAILURES!` nor
+/// `failed asserting that` — only `FAILED  Tests\CalcTest > undefined method
+/// Error` and `Tests:    1 failed (0 assertions)`. Without this helper that
+/// classified as `CommandFailure`, which cannot produce a proof, so Pest
+/// projects silently lost their red/green evidence.
+///
+/// A passing run is `Tests: 1 passed (1 assertions)` and a fully skipped run
+/// is `Tests: 1 skipped (0 assertions)`; neither contains a non-zero count.
+fn has_phpunit_failure_count(lower: &str) -> bool {
+    for line in lower.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("tests:") {
+            continue;
+        }
+        for label in ["failures:", "errors:"] {
+            if let Some(index) = trimmed.find(label) {
+                let count: String = trimmed[index + label.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                if count.parse::<u64>().unwrap_or(0) > 0 {
+                    return true;
+                }
+            }
+        }
+        // Pest's wording: a bare `N failed` on the same line.
+        if let Some(index) = trimmed.find(" failed") {
+            let count: String = trimmed[..index]
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if count
+                .chars()
+                .rev()
+                .collect::<String>()
+                .parse::<u64>()
+                .unwrap_or(0)
+                > 0
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Whether pytest's summary reports a non-zero failed count.
@@ -508,6 +595,12 @@ mod tests {
     }
 
     /// The exact regression this ADR fixes, asserted against every framework.
+    ///
+    /// Driven by [`TestFramework::all`] rather than a hand-written list, so
+    /// adding a framework cannot silently skip this assertion — which is
+    /// exactly what had happened: the list still named four frameworks after
+    /// Java and Ruby shipped, and the samples below had never been extended to
+    /// cover them.
     #[test]
     fn every_supported_framework_recognizes_its_own_failure_output() {
         let samples = [
@@ -524,7 +617,21 @@ mod tests {
                 "Tests:       1 failed, 1 passed, 2 total\n",
             ),
             (TestFramework::Go, "--- FAIL: TestAdd (0.00s)\nFAIL\n"),
+            (
+                TestFramework::Java,
+                "Tests run: 2, Failures: 1, Errors: 0, Skipped: 0\n",
+            ),
+            (TestFramework::Ruby, "2 examples, 1 failure\n"),
+            (
+                TestFramework::Php,
+                "FAILURES!\nTests: 2, Assertions: 2, Failures: 1.\n",
+            ),
         ];
+        assert_eq!(
+            samples.len(),
+            TestFramework::all().len(),
+            "every framework needs a captured sample in this test"
+        );
         for (framework, output) in samples {
             assert_eq!(
                 framework.classify(output, "", Some(1)),
@@ -694,5 +801,133 @@ mod ruby_tests {
             );
         }
         assert_eq!(TestFramework::Ruby.as_str(), "ruby");
+    }
+
+    #[test]
+    fn php_names_parse() {
+        for name in ["php", "phpunit", "pest"] {
+            assert_eq!(
+                TestFramework::parse(name),
+                Some(TestFramework::Php),
+                "{name}"
+            );
+        }
+        assert_eq!(TestFramework::Php.as_str(), "php");
+    }
+
+    /// Captured from a real PHPUnit 10.5.66 run: one failing assertion among
+    /// two passing tests, exit code 1.
+    #[test]
+    fn phpunit_assertion_failure_is_recognized() {
+        let stdout = "PHPUnit 10.5.66 by Sebastian Bergmann and contributors.\n\nRuntime:       PHP 8.5.9\n\nF.                                                                  2 / 2 (100%)\n\nTime: 00:00.008, Memory: 8.00 MB\n\nThere was 1 failure:\n\n1) CalcTest::testAdd\nFailed asserting that 5 matches expected 6.\n\n/private/tmp/phpunitfx/tests/CalcTest.php:5\n\nFAILURES!\nTests: 2, Assertions: 2, Failures: 1.\n";
+        assert_eq!(
+            TestFramework::Php.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// Captured from a real PHPUnit run: a test that throws. This is an error,
+    /// not a failed assertion, but both are behavioural — a compile failure is
+    /// not, so this must not be classified as one.
+    #[test]
+    fn phpunit_thrown_error_is_a_test_failure() {
+        let stdout = "1) CalcTest::testAdd\nRuntimeException: boom\n\n/private/tmp/phpunitfx/tests/CalcTest.php:5\n\nERRORS!\nTests: 1, Assertions: 0, Errors: 1.\n";
+        assert_eq!(
+            TestFramework::Php.classify(stdout, "", Some(2)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// A passing run must never be read as a failure. It prints `OK (N tests,
+    /// N assertions)` with no `Tests:` line at all.
+    #[test]
+    fn passing_phpunit_run_is_not_a_test_failure() {
+        let stdout = "PHPUnit 10.5.66 by Sebastian Bergmann and contributors.\n\n..                                                                  2 / 2 (100%)\n\nTime: 00:00.002, Memory: 8.00 MB\n\nOK (2 tests, 2 assertions)\n";
+        assert_ne!(
+            TestFramework::Php.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+        assert_ne!(
+            TestFramework::Php.classify(stdout, "", Some(0)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// Captured from a real PHPUnit run: every test skipped. The count line
+    /// reads `Skipped: 1` with zero failures, and the run exits 0. It must not
+    /// be mistaken for a red suite, which would make an empty suite look like
+    /// evidence.
+    #[test]
+    fn skipped_phpunit_run_is_not_a_test_failure() {
+        let stdout = "S                                                                   1 / 1 (100%)\n\nTime: 00:00.003, Memory: 8.00 MB\n\nOK, but some tests were skipped!\nTests: 1, Assertions: 0, Skipped: 1.\n";
+        assert_ne!(
+            TestFramework::Php.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// Captured from a real PHPUnit run: a file that cannot be parsed. PHPUnit
+    /// exits 255 with no summary line, and treating it as a behavioural failure
+    /// would let a base that never compiled stand in for a real regression.
+    #[test]
+    fn unparsable_phpunit_file_is_a_compile_failure() {
+        let stdout = "An error occurred inside PHPUnit.\n\nMessage:  syntax error, unexpected token \"{\"\nLocation: /private/tmp/phpunitfx/tests/CalcTest.php:2\n\n#0 /private/tmp/phpunitfx/vendor/phpunit/phpunit/src/Runner/TestSuiteLoader.php(48): PHPUnit\\Runner\\TestSuiteLoader->loadSuiteClassFile()\n";
+        assert_eq!(
+            TestFramework::Php.classify(stdout, "", Some(255)),
+            FailureKind::CompileError
+        );
+    }
+
+    /// An unrecognized PHP failure must not be guessed at. Reporting
+    /// `CommandFailure` is honest and cannot produce a proof.
+    #[test]
+    fn unknown_php_failure_is_not_guessed() {
+        assert_eq!(
+            TestFramework::Php.classify("something went wrong\n", "", Some(1)),
+            FailureKind::CommandFailure
+        );
+    }
+
+    /// Captured from a real Pest 3 run: an assertion failure. Pest prints no
+    /// `FAILURES!` marker, so this depends on the count line.
+    #[test]
+    fn pest_assertion_failure_is_recognized() {
+        let stdout = "   FAIL  Tests\\CalcTest\n  \u{2a2f} adds\n  \u{2713} passes\n   FAILED  Tests\\CalcTest > adds\n  Failed asserting that 5 is identical to 6.\n\n  Tests:    1 failed, 1 passed (2 assertions)\n  Duration: 0.03s\n";
+        assert_eq!(
+            TestFramework::Php.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// Captured from a real Pest 3 run: a test that errors on something other
+    /// than an assertion — `Error` rather than a failed expectation. This
+    /// prints neither `FAILURES!` nor `failed asserting that`, so the count
+    /// line is the only signal. Classified as `CommandFailure` before that was
+    /// handled, which silently denied every Pest project its proof.
+    #[test]
+    fn pest_non_assertion_error_is_recognized() {
+        let stdout = "   FAILED  Tests\\CalcTest > undefined method                            Error   \n  Tests:    1 failed (0 assertions)\n  Duration: 0.02s\n";
+        assert_eq!(
+            TestFramework::Php.classify(stdout, "", Some(2)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn passing_pest_run_is_not_a_test_failure() {
+        let stdout = "  \u{2713} passes\n  Tests:    1 passed (1 assertions)\n  Duration: 0.03s\n";
+        assert_ne!(
+            TestFramework::Php.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
+    }
+
+    #[test]
+    fn skipped_pest_run_is_not_a_test_failure() {
+        let stdout = "  - skips\n  Tests:    1 skipped (0 assertions)\n  Duration: 0.02s\n";
+        assert_ne!(
+            TestFramework::Php.classify(stdout, "", Some(0)),
+            FailureKind::TestFailure
+        );
     }
 }

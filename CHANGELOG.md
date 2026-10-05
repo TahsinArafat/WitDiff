@@ -2,7 +2,39 @@
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- **PHP support: PHPUnit and Pest.** A PHP project previously received the
+  red/green proof but **no integrity findings at all** — the rules that catch a
+  change weakening its own tests did not run. PHP now joins the shared rule
+  engine (`testshape`) as a seventh language, using `token_get_all` from the
+  standard library, so no Composer dependency is required for the analysis.
+  Both `assertEquals(expected, actual)` and `expect($x)->toBe($y)` normalize to
+  subject-first so a changed expectation is reported as a change rather than as
+  a removal plus an addition. Verified against real PHPUnit 10.5.66 and Pest 3:
+  a credible PHP test reaches `verified` with `red_green_proven: true`, and a
+  vacuous one that plain PHPUnit calls green is reported `not_verified`. See
+  ADR-0023.
+- **PHP project detection.** `composer.json`, `phpunit.xml`, `phpunit.xml.dist`
+  and `pest.php` are recognized by `witdiff init`, checked before
+  `package.json` because a WordPress plugin commonly ships both.
+
+### Fixed
+
+- **A PHP verification failed its own freshness gate on the suite's cache.**
+  `.phpunit.result.cache` and Pest's
+  `vendor/pestphp/pest/.temp/test-results` are created by the act of running
+  the tests, and were not classified as build output, so a green run reported
+  that the source under verification had moved.
+- **A Pest test that errors on something other than an assertion could not
+  produce a proof.** Pest prints neither `FAILURES!` nor `failed asserting
+  that`, so such a run classified as `CommandFailure` — which cannot prove
+  anything. Pest projects silently lost their red/green evidence while
+  appearing to work.
+- **`every_supported_framework_recognizes_its_own_failure_output` no longer
+  covers every framework.** It enumerated four in a hand-written list and was
+  never extended when Java and Ruby shipped; adding PHP did not extend it
+  either. It is now driven by `TestFramework::all()` with a length assertion.
 
 ## 1.0.0-alpha.2
 

@@ -2,7 +2,7 @@
 
 This file is the authoritative entry point for coding agents working in this repository. Read it before editing code. Then read `docs/product.md`, `docs/architecture.md`, and `docs/verification-model.md`.
 
-For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis works for Rust, Python, Go, Java, Ruby (Minitest and RSpec) and JavaScript/TypeScript; that JavaScript needs a parser in the project because Node ships none; and that the line-based fallback matches Rust syntax exclusively.
+For what is supported per language, and which limitations are deliberate, read `docs/support-matrix.md`. It records that structural integrity analysis works for Rust, Python, Go, Java, Ruby (Minitest and RSpec), JavaScript/TypeScript and PHP (PHPUnit and Pest); that JavaScript needs a parser in the project because Node ships none; and that the line-based fallback matches Rust syntax exclusively.
 
 Structural analyzers share one rule engine, `witdiff_core::testshape`. Add a language by supplying a summary and an operator vocabulary, not by copying rules.
 
