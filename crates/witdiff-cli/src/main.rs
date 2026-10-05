@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use witdiff_core::{
     config::Config, inspect_repository, model::MutantOutcome, verify::write_receipt,
-    verify_repository, CommandSpec, GitRepo, Receipt, Severity, VerifyOptions,
+    verify_repository, CommandSpec, GatePolicy, GitRepo, Receipt, Severity, VerifyOptions,
 };
 
 #[derive(Debug, Parser)]
@@ -374,11 +374,24 @@ fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
         print_receipt_summary(&receipt);
     }
 
+    // The committed policy is a floor and the flags can only raise it, so a
+    // repository that pins `strict = true` cannot be talked out of it by
+    // leaving a flag off (ADR-0013).
+    let policy = config
+        .gate
+        .clone()
+        .tightened_by(strict, fail_on_no_changed_tests);
+
     if github_annotations {
-        print_github_annotations(&receipt, strict, fail_on_no_changed_tests);
+        print_github_annotations(&receipt, &policy);
     }
 
-    let gate = receipt.status.gate(strict, fail_on_no_changed_tests);
+    let gate = receipt.gate(&policy);
+    if let Some(reason) = receipt.gate_reason(&policy) {
+        if !json {
+            println!("  gate             : {reason}");
+        }
+    }
     Ok(if gate.passes() {
         ExitCode::SUCCESS
     } else {
@@ -409,12 +422,8 @@ fn escape_github_property(text: &str) -> String {
 ///
 /// Written to stdout as workflow commands so the workflow file needs no logic
 /// and no string escaping of its own (ADR-0013).
-fn print_github_annotations(
-    receipt: &witdiff_core::Receipt,
-    strict: bool,
-    fail_on_no_changed_tests: bool,
-) {
-    let gate = receipt.status.gate(strict, fail_on_no_changed_tests);
+fn print_github_annotations(receipt: &witdiff_core::Receipt, policy: &GatePolicy) {
+    let gate = receipt.gate(policy);
     let summary = format!(
         "WitDiff: {} ({} changed test file(s), {} changed production file(s))",
         receipt.status.as_str(),
@@ -590,6 +599,33 @@ fn print_receipt_summary(receipt: &Receipt) {
     }
     println!("  red/green proven : {}", receipt.red_green_proven);
     println!("  evidence fresh   : {}", receipt.evidence_fresh);
+
+    // The environment is the one thing a receipt says that the digest does not.
+    // Shown as the toolchain that ran and the number of manifests pinned, so a
+    // reader can see at a glance that this proof was produced under a known
+    // toolchain. The full map is in the JSON, where it is comparable across
+    // receipts rather than merely readable.
+    if !receipt.environment.is_empty() {
+        let tools = receipt
+            .environment
+            .iter()
+            .filter(|(key, _)| key.starts_with("tool_") || *key == "test_program")
+            .map(|(key, value)| {
+                let name = key.strip_prefix("tool_").unwrap_or(key);
+                format!("{name} {value}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let manifests = receipt
+            .environment
+            .iter()
+            .filter(|(key, _)| key.starts_with("manifest_"))
+            .count();
+        println!("  environment      : {tools}");
+        if manifests > 0 {
+            println!("                     {manifests} dependency manifest(s) recorded");
+        }
+    }
 
     let high = receipt
         .integrity_findings

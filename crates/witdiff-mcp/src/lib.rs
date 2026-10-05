@@ -273,12 +273,19 @@ impl Server {
         )?;
 
         // The gate verdict comes from the same function the CLI and CI use, so
-        // MCP cannot disagree with them (ADR-0013).
-        let gate = receipt.status.gate(strict, fail_on_no_changed_tests);
+        // MCP cannot disagree with them (ADR-0013). The committed policy is a
+        // floor: flags passed here may tighten it and can never relax it, or a
+        // client could sidestep what the repository enforces.
+        let policy = config
+            .gate
+            .clone()
+            .tightened_by(strict, fail_on_no_changed_tests);
+        let gate = receipt.gate(&policy);
         Ok(json!({
             "gate": gate.as_str(),
             "passed": gate.passes(),
             "status": receipt.status.as_str(),
+            "gate_reason": receipt.gate_reason(&policy),
             "receipt": receipt,
         }))
     }

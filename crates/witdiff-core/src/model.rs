@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::environment::Environment;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
@@ -278,6 +280,85 @@ impl GateOutcome {
     }
 }
 
+/// Which results an organization will accept as a pass, committed once in
+/// `witdiff.toml` rather than restated as flags on every invocation.
+///
+/// The set of questions is deliberately small: each is a decision the CLI
+/// already offers as a flag, plus a signature requirement it did not offer at
+/// all. It is *not* a free-form allow-list of statuses.
+///
+/// That restraint is the point. A list of acceptable statuses would let a
+/// repository write `pass = ["not_verified"]` and defeat the whole tool by
+/// configuration, which is exactly the review question "can an unknown or
+/// unsupported state accidentally become `Verified`?" Policy decides how
+/// strictly a verdict is judged, never which verdicts exist.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatePolicy {
+    /// Require exactly `verified`, refusing `verified_with_warnings`.
+    pub strict: bool,
+    /// Treat "nothing to prove" as a failure, for repositories that require a
+    /// test change with every pull request.
+    pub fail_on_no_changed_tests: bool,
+    /// Require the receipt to carry a signature.
+    ///
+    /// Distinct from signing being *configured*: this makes an unsigned
+    /// receipt a gate failure rather than a fact, which is what an operator who
+    /// asked for signatures and did not get one wants.
+    pub require_signature: bool,
+}
+
+impl GatePolicy {
+    /// Fold command-line flags in.
+    ///
+    /// Flags may only **tighten** a committed policy, never relax it: a policy
+    /// checked into the repository is a floor, so `--strict` can raise it and
+    /// the absence of `--strict` cannot lower it. Otherwise every developer
+    /// could quietly undo what CI enforces.
+    pub fn tightened_by(mut self, strict: bool, fail_on_no_changed_tests: bool) -> Self {
+        self.strict |= strict;
+        self.fail_on_no_changed_tests |= fail_on_no_changed_tests;
+        self
+    }
+
+    /// Whether this policy asks for anything the defaults do not.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+impl Receipt {
+    /// Evaluate this receipt against a gate policy.
+    ///
+    /// This is the whole policy surface: the status verdict the CLI already
+    /// computes, plus whatever else the policy demands. Keeping it on the
+    /// receipt rather than the status is what makes a requirement about the
+    /// *document* — a signature — expressible in the same place as a
+    /// requirement about the *verdict*.
+    pub fn gate(&self, policy: &GatePolicy) -> GateOutcome {
+        if policy.require_signature && self.signature.is_none() {
+            return GateOutcome::Failed;
+        }
+        self.status
+            .gate(policy.strict, policy.fail_on_no_changed_tests)
+    }
+
+    /// Why this receipt fails the policy, or `None` when it does not fail one.
+    ///
+    /// Separate from [`Receipt::gate`] so a caller can print the reason while
+    /// `GateOutcome` stays the three-valued type every consumer already
+    /// pattern-matches on. Returns `Some` only for policy demands, never for a
+    /// status verdict, because the status has its own explanation already.
+    pub fn gate_reason(&self, policy: &GatePolicy) -> Option<String> {
+        if policy.require_signature && self.signature.is_none() {
+            return Some(
+                "the gate requires a signed receipt, but this receipt has no signature".to_owned(),
+            );
+        }
+        None
+    }
+}
+
 impl RunResult {
     /// A run that never started, because the program does not exist.
     ///
@@ -480,6 +561,26 @@ pub struct Receipt {
     /// written before this field existed still parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mutation: Option<MutationReport>,
+    /// The environment the evidence was produced under: toolchain versions and
+    /// the digests of the dependency manifests that pinned them.
+    ///
+    /// The digest answers *what* was verified; this answers *where*. A proof
+    /// that holds under Python 3.9 and pytest 8.4 is a different claim than the
+    /// same revision under Python 3.12 and pytest 9, and the receipt could
+    /// previously not tell them apart.
+    ///
+    /// Deliberately **not** folded into `verification_digest`: that digest is
+    /// recomputed by `witdiff receipt` against a stored receipt, and folding
+    /// the environment in would make every older receipt report that its inputs
+    /// changed the moment Python was upgraded. Deliberately not signed either,
+    /// for the same reason the other receipt fields are not: ADR-0022 keeps
+    /// signed bytes to the status and the digest so that adding a field cannot
+    /// invalidate an existing signature. This is descriptive evidence for a
+    /// reader and carries no authority on its own.
+    ///
+    /// Additive in v1, so receipts written before it existed parse as empty.
+    #[serde(default)]
+    pub environment: Environment,
 }
 
 /// The outcome of running the suite against one mutant.
@@ -727,6 +828,29 @@ mod tests {
             !receipt.changed_files[0].path_is_lossy && !receipt.changed_files[0].previous_is_test,
             "added path flags must default to the safe values"
         );
+        assert!(
+            receipt.environment.is_empty(),
+            "a receipt written before the environment field existed must not \
+             invent one; an invented toolchain would be evidence nobody collected"
+        );
+    }
+
+    /// The environment must round-trip, or the field disappears on the way to
+    /// a consumer that re-serializes it.
+    #[test]
+    fn an_environment_survives_a_json_round_trip() {
+        // Built from JSON rather than through a mutator, so the test also
+        // covers the shape a consumer will actually send back.
+        let environment: crate::environment::Environment =
+            serde_json::from_str(r#"{"test_program":"cargo","manifest_Cargo.lock":"8268d187"}"#)
+                .expect("deserialize");
+
+        let text = serde_json::to_string(&environment).expect("serialize");
+        let back: crate::environment::Environment =
+            serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(back, environment);
+        assert_eq!(back.get("test_program"), Some("cargo"));
+        assert_eq!(back.get("manifest_Cargo.lock"), Some("8268d187"));
     }
 
     #[test]
@@ -848,6 +972,216 @@ mod gate_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod gate_policy_tests {
+    use super::*;
+
+    /// A minimal receipt with the status under test.
+    fn receipt_with_status(status: VerificationStatus) -> Receipt {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "witdiff.receipt.v1",
+            "generated_at": "2024-01-01T00:00:00Z",
+            "status": status.as_str(),
+            "repo_root": "/repo",
+            "base": "HEAD~1",
+            "head_commit": "abc123",
+            "workspace_fingerprint_before": "aa",
+            "workspace_fingerprint_after": "aa",
+            "evidence_fresh": true,
+            "changed_files": [],
+            "changed_test_files": [],
+            "integrity_findings": [],
+            "head_run": {
+                "command": ["cargo", "test"], "cwd": "/repo", "success": true,
+                "exit_code": 0, "duration_ms": 1, "stdout": "", "stderr": "",
+                "failure_kind": null
+            },
+            "base_run": null,
+            "red_green_proven": true,
+            "notes": []
+        }))
+        .expect("the fixture must be a valid receipt")
+    }
+
+    fn signed(mut receipt: Receipt) -> Receipt {
+        receipt.signature = Some(ReceiptSignature {
+            algorithm: "ed25519".to_owned(),
+            value: "AA".to_owned(),
+            digest: "digest".to_owned(),
+        });
+        receipt
+    }
+
+    /// The property that makes the policy safe to commit: a flag can raise a
+    /// committed policy but can never lower it. Without this, every developer
+    /// could simply omit `--strict` and undo what CI enforces.
+    #[test]
+    fn flags_can_only_tighten_a_committed_policy() {
+        let committed = GatePolicy {
+            strict: true,
+            fail_on_no_changed_tests: true,
+            require_signature: true,
+        };
+
+        // No flags at all: nothing relaxes.
+        let unchanged = committed.clone().tightened_by(false, false);
+        assert_eq!(unchanged, committed);
+
+        // Both flags raise: nothing to gain, but nothing lost either.
+        let raised = committed.clone().tightened_by(true, true);
+        assert_eq!(raised, committed);
+        assert!(raised.strict && raised.fail_on_no_changed_tests);
+
+        // A flag cannot be used to opt out of something already set.
+        assert!(
+            GatePolicy {
+                strict: true,
+                ..GatePolicy::default()
+            }
+            .tightened_by(false, false)
+            .strict,
+            "leaving --strict off must not unset a committed strict policy"
+        );
+    }
+
+    /// The inverse direction is what a flag is for.
+    #[test]
+    fn a_flag_tightens_a_default_policy() {
+        let policy = GatePolicy::default().tightened_by(true, false);
+        assert!(policy.strict);
+        assert!(!policy.fail_on_no_changed_tests);
+        assert!(
+            !policy.require_signature,
+            "a flag cannot set unrelated demands"
+        );
+    }
+
+    /// With no policy configured, behaviour is exactly what the CLI did before
+    /// the policy existed. This is the regression guard for every consumer.
+    #[test]
+    fn a_default_policy_matches_the_status_gate() {
+        for status in [
+            VerificationStatus::Verified,
+            VerificationStatus::VerifiedWithWarnings,
+            VerificationStatus::NotVerified,
+            VerificationStatus::NoChangedTests,
+            VerificationStatus::HeadFailed,
+            VerificationStatus::BaseIncompatible,
+        ] {
+            let receipt = receipt_with_status(status.clone());
+            let policy = GatePolicy::default();
+            assert_eq!(
+                receipt.gate(&policy),
+                status.gate(false, false),
+                "a default policy must not change the verdict for {status:?}"
+            );
+        }
+    }
+
+    /// Strictness still behaves as documented under the new entry point.
+    #[test]
+    fn a_policy_passes_strict_as_strictly_verified() {
+        let strict = GatePolicy {
+            strict: true,
+            ..GatePolicy::default()
+        };
+        assert!(receipt_with_status(VerificationStatus::Verified)
+            .gate(&strict)
+            .passes());
+        assert!(
+            !receipt_with_status(VerificationStatus::VerifiedWithWarnings)
+                .gate(&strict)
+                .passes(),
+            "strict mode must refuse warnings"
+        );
+    }
+
+    /// `require_signature` is the one requirement about the document rather
+    /// than the verdict, which is why it lives on the receipt and not on
+    /// `VerificationStatus`.
+    #[test]
+    fn a_policy_can_require_a_signature() {
+        let policy = GatePolicy {
+            require_signature: true,
+            ..GatePolicy::default()
+        };
+
+        let unsigned = receipt_with_status(VerificationStatus::Verified);
+        assert!(
+            !unsigned.gate(&policy).passes(),
+            "a policy demanding a signature must fail an unsigned receipt, even \
+             when the verdict is otherwise proven"
+        );
+        assert_eq!(
+            unsigned.gate_reason(&policy).as_deref(),
+            Some("the gate requires a signed receipt, but this receipt has no signature")
+        );
+
+        let signed = signed(receipt_with_status(VerificationStatus::Verified));
+        assert!(signed.gate(&policy).passes());
+        assert_eq!(signed.gate_reason(&policy), None);
+
+        // The requirement never manufactures a pass: an unsigned, unproven
+        // receipt fails for both reasons and says why only about the policy.
+        let failing = receipt_with_status(VerificationStatus::NotVerified);
+        assert!(!failing.gate(&policy).passes());
+    }
+
+    /// The interaction between "nothing to prove" and a signature requirement
+    /// is not obvious, so it is asserted rather than assumed. Applying the
+    /// requirement uniformly is the honest reading: a receipt is still produced
+    /// for a change with no tests, and an operator who demands signatures
+    /// demands them on every receipt.
+    #[test]
+    fn a_signature_requirement_applies_even_when_there_is_nothing_to_prove() {
+        let policy = GatePolicy {
+            require_signature: true,
+            ..GatePolicy::default()
+        };
+        let receipt = receipt_with_status(VerificationStatus::NoChangedTests);
+        assert!(
+            !receipt.gate(&policy).passes(),
+            "the policy is a demand about the receipt, not about the verdict"
+        );
+
+        // Without that demand, the default still passes, so ADR-0013's
+        // documentation-only pull request is unaffected.
+        assert!(receipt.gate(&GatePolicy::default()).passes());
+    }
+
+    #[test]
+    fn a_default_policy_is_reportable_as_default() {
+        assert!(GatePolicy::default().is_default());
+        assert!(!GatePolicy {
+            strict: true,
+            ..GatePolicy::default()
+        }
+        .is_default());
+    }
+
+    #[test]
+    fn a_policy_round_trips_through_serde() {
+        let policy = GatePolicy {
+            strict: true,
+            fail_on_no_changed_tests: false,
+            require_signature: true,
+        };
+        let text = serde_json::to_string(&policy).expect("serialize");
+        let back: GatePolicy = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(back, policy);
+    }
+
+    /// A partial `[gate]` section must load with the rest defaulted, or an
+    /// operator could set only `strict` and silently disable the other fields.
+    #[test]
+    fn a_partial_policy_loads_with_the_rest_defaulted() {
+        let policy: GatePolicy = toml::from_str("strict = true").expect("load");
+        assert!(policy.strict);
+        assert!(!policy.fail_on_no_changed_tests);
+        assert!(!policy.require_signature);
     }
 }
 

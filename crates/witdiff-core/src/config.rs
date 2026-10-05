@@ -11,6 +11,12 @@ use crate::framework::TestFramework;
 pub struct Config {
     pub project: ProjectConfig,
     pub verification: VerificationConfig,
+    /// Which results count as a pass, committed once per repository.
+    ///
+    /// Lives in its own section rather than under `verification` because it
+    /// answers a different question: `verification` describes how to gather
+    /// evidence, this describes what evidence will be accepted.
+    pub gate: crate::model::GatePolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -559,5 +565,71 @@ mod inference_tests {
                 "{markers:?} produced invalid test globs"
             );
         }
+    }
+
+    /// The `[gate]` section must load, and an absent section must default.
+    /// Otherwise an operator could set `strict = true` and silently leave the
+    /// other two requirements at whatever they happened to be.
+    #[test]
+    fn a_gate_section_loads_and_absent_fields_default() {
+        let loaded: Config = toml::from_str("[gate]\nstrict = true\nrequire_signature = true\n")
+            .expect("a gate section must parse");
+        assert!(loaded.gate.strict);
+        assert!(loaded.gate.require_signature);
+        assert!(
+            !loaded.gate.fail_on_no_changed_tests,
+            "an unset field must take its default rather than a neighbouring value"
+        );
+
+        let absent: Config = toml::from_str("[project]\nlanguage = \"rust\"\n")
+            .expect("a config without a gate section must parse");
+        assert!(
+            absent.gate.is_default(),
+            "an absent [gate] section must mean the defaults, got {:?}",
+            absent.gate
+        );
+    }
+
+    /// The shipped example is what an operator reads first. It must parse, or
+    /// the one document meant to teach the policy is unusable.
+    #[test]
+    fn the_shipped_example_config_parses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|workspace| workspace.parent())
+            .map(|repo| repo.join("examples").join("witdiff.toml"));
+        let Some(path) = path else {
+            return;
+        };
+        let Ok(text) = fs::read_to_string(&path) else {
+            return;
+        };
+        let parsed: Config =
+            toml::from_str(&text).expect("examples/witdiff.toml must remain valid TOML");
+        assert!(
+            !parsed.verification.test_command.is_empty(),
+            "the example must still configure a test command"
+        );
+        assert!(
+            parsed.gate.is_default(),
+            "the example documents defaults rather than unusual demands"
+        );
+    }
+
+    /// The repository's own configuration must parse too: a broken one would
+    /// mean the project cannot verify itself.
+    #[test]
+    fn this_repository_s_own_config_parses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|workspace| workspace.parent())
+            .map(|repo| repo.join("witdiff.toml"));
+        let Some(path) = path else {
+            return;
+        };
+        let Ok(text) = fs::read_to_string(&path) else {
+            return;
+        };
+        toml::from_str::<Config>(&text).expect("witdiff.toml must remain valid TOML");
     }
 }

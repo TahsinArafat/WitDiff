@@ -443,6 +443,12 @@ pub fn verify_repository(
     })
     .ok();
 
+    // The environment is collected separately from the digest: the digest is
+    // about *what* was verified and is recomputed later for freshness, while
+    // this is about *where*. Folding it in would make every older receipt
+    // report stale inputs the moment the toolchain changed.
+    let environment = crate::environment::collect(repo, &command.as_vec());
+
     // Signing is opt-in and happens after the digest, so the signature covers
     // exactly what was verified. A signing failure never fails verification: the
     // receipt is still produced, unsigned, and the operator is told (ADR-0022).
@@ -546,6 +552,7 @@ pub fn verify_repository(
         verification_digest,
         signature,
         mutation,
+        environment,
     })
 }
 

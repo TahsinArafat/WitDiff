@@ -25,6 +25,20 @@
 //! incremental cache instead of forcing a full rebuild per revision. Without
 //! this, the base worktree would fall back to `~/.cargo`'s shared registry but
 //! a private target dir, and the two runs would each pay full compile cost.
+//!
+//! **Measured caveat: sharing that directory is not free.** The two workspaces
+//! are the same crate written by two different revisions, so they write the same
+//! output path. After the base experiment rebuilds the buggy source, the shared
+//! artifact is newer than the workspace's own `src/lib.rs`, cargo treats it as
+//! fresh, and a *second* `verify` run in the same directory reports `head_failed`
+//! for a workspace that compiles green. Isolated target directories do not show
+//! it: three consecutive runs, each `verified`.
+//!
+//! Every test here runs `verify` once against a fresh fixture, so this does not
+//! affect them. It is recorded because the pattern is what CI caching does —
+//! `CARGO_TARGET_DIR` pointing at a shared cache across two worktrees — and the
+//! failure is a confusing gate break rather than a wrong pass. Prefer isolated
+//! target directories, or expect to rebuild before trusting a repeat run.
 
 use std::{fs, path::Path};
 
@@ -32,7 +46,8 @@ use std::process::Command as StdCommand;
 
 use tempfile::TempDir;
 use witdiff_core::{
-    verify::verify_repository, Config, GitRepo, VerificationStatus, VerifyOptions, WorktreeGuard,
+    model::ChangeKind, verify::verify_repository, Config, GitRepo, VerificationStatus,
+    VerifyOptions, WorktreeGuard,
 };
 
 /// Absolute path to the `cargo` binary running the test harness.
@@ -62,6 +77,13 @@ impl Fixture {
 
         // A dedicated target directory keeps fixtures from contending with each
         // other and lets the base worktree reuse the workspace build cache.
+        //
+        // See the module comment for the caveat: sharing this between the two
+        // workspaces makes a *repeat* verify in the same directory report
+        // `head_failed`, because the base build writes a newer artifact than
+        // the workspace source. Fixtures run `verify` once, so it does not
+        // bite here; a project whose CI shares `CARGO_TARGET_DIR` across
+        // worktrees would see it.
         //
         // The target directory MUST be git-ignored and `Cargo.lock` MUST be
         // committed, otherwise the very first build mutates the workspace
@@ -1520,6 +1542,109 @@ fn integrity_findings_survive_a_missing_test_command() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// M6: environment evidence
+// ---------------------------------------------------------------------------
+
+/// The receipt records where the evidence came from, which the digest
+/// deliberately does not cover.
+///
+/// The digest answers *what* was verified and is recomputed for freshness; the
+/// environment answers *where*. Folding it in would make every older receipt
+/// report stale inputs the moment Python was upgraded.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn the_receipt_records_the_environment_that_produced_it() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    let receipt = fixture.verify(&fixture_config());
+    let environment = &receipt.environment;
+
+    assert!(
+        !environment.is_empty(),
+        "a receipt must record the environment it was produced under"
+    );
+    // The configured program and its version, so a reader knows which runner
+    // produced the result rather than having to guess from the command.
+    assert_eq!(
+        environment.get("test_program"),
+        Some("cargo"),
+        "the configured test program must be named"
+    );
+    let version = environment
+        .get("test_program_version")
+        .expect("the test program's version must be recorded");
+    assert!(!version.is_empty() && version != "unknown");
+
+    // The lockfile is the dependency identity, recorded as a digest so a
+    // consumer can tell "the deps changed" without receiving the list.
+    assert!(
+        environment
+            .iter()
+            .any(|(key, _)| key == "manifest_Cargo.lock"),
+        "the lockfile must be part of the environment, got {:?}",
+        environment.iter().map(|(key, _)| key).collect::<Vec<_>>()
+    );
+}
+
+/// The environment must not leak into the digest, or the backward-compat
+/// property above is broken in practice: `witdiff receipt` recomputes the
+/// digest and would report every stored receipt as changed.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn the_environment_does_not_affect_the_verification_digest() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    let receipt = fixture.verify(&fixture_config());
+    let recorded = receipt
+        .verification_digest
+        .as_deref()
+        .expect("a digest must be recorded");
+
+    // Recompute from the same inputs the `receipt` command uses. It sees the
+    // current environment, which is the environment that just produced this
+    // digest; the point is that the digest is a function of content alone, so
+    // this comparison is stable even as the toolchain changes.
+    let repo = fixture.repo();
+    let production_paths: Vec<String> = receipt
+        .changed_files
+        .iter()
+        .filter(|file| !file.is_test && !matches!(file.kind, ChangeKind::Deleted))
+        .map(|file| file.path.clone())
+        .collect();
+    let config = fixture_config();
+    let head = repo.head_commit().expect("head");
+    let recomputed = witdiff_core::digest::collect(
+        &repo,
+        &receipt.base,
+        &head,
+        &config.verification.test_command,
+        &receipt.changed_test_files,
+        &production_paths,
+    )
+    .expect("digest recomputes");
+
+    assert_eq!(
+        recorded,
+        recomputed.as_str(),
+        "the digest must depend on content only; an environment-dependent \
+         digest would make every stored receipt report itself stale"
+    );
+}
 // ---------------------------------------------------------------------------
 // ADR-0022: signed receipts
 // ---------------------------------------------------------------------------
