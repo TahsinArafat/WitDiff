@@ -303,6 +303,56 @@ suite. Both are classified as build output, because failing a freshness gate
 over the suite's own scratch files reports a test run as evidence that the
 source under verification had moved.
 
+## Using WitDiff on a language it does not know
+
+The red/green proof is **not** language-specific. It needs three things and
+none of them is a parser:
+
+1. a test command that exits non-zero when the tests fail;
+2. a `framework` whose failure output the classifier recognizes;
+3. `test_globs` that mark the changed test files.
+
+Measured on a **C** project (`cc` invoked from a shell script, no analyzer,
+not in the matrix below):
+
+```text
+status           : verified
+base control     : PASS
+base + tests     : FAIL
+red_green_proven : true
+```
+
+and the same fixture with a vacuous test — `add(2,3) != add(2,3)`, true under
+any implementation — reported `not_verified` with the note *"changed tests also
+pass on the base revision; they do not prove the behavioral change"*, while the
+plain runner said `1 test passed`.
+
+So on an unknown language you get the core claim, and you get it honestly.
+
+**What you do not get is structural integrity analysis.** The C fixture
+produced `integrity_findings: []` — the rules that catch a test weakening its
+own assertions need a parser for the language, and there is none. A change that
+replaced a real assertion with a vacuous one would still be caught, but only via
+the red/green experiment, not as a finding.
+
+The `framework` requirement is the awkward one. It is not a language; it is
+which failure-output vocabulary WitDiff recognizes. Pointing a C project at
+`framework = "cargo"` works **only if the runner emits wording the cargo
+classifier knows** (`test result: FAILED`, `failures:`, `panicked at`). A runner
+that prints `FAILED` and exits 1 is a real failure WitDiff refuses to call one,
+and says so:
+
+```text
+note: base+changed-tests command failed, but not with a recognized test
+      assertion failure
+```
+
+That refusal is deliberate — see ADR-0012. Accepting any non-zero exit as a
+behavioural failure would make a broken build, a missing interpreter and a typo
+in the command all look like proof. But it does mean a generic runner needs a
+one-line vocabulary change to get a proof, and the honest way to describe that
+is: **the proof is language-agnostic, the classifier is not.**
+
 ## Other languages: assessment, not support
 
 These were checked directly on this machine. None is supported; the point is to
