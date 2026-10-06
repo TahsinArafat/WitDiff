@@ -207,7 +207,7 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
         } else if kind.is_symlink() {
             let link = std::fs::read_link(&from)
                 .with_context(|| format!("failed reading link {}", from.display()))?;
-            std::os::unix::fs::symlink(&link, &to)
+            symlink(&link, &to)
                 .with_context(|| format!("failed copying link {}", from.display()))?;
         } else {
             std::fs::copy(&from, &to)
@@ -215,6 +215,45 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Create a symlink, on every platform Rust can build for.
+///
+/// `std::os::unix::fs::symlink` does not exist on Windows, so calling it
+/// unconditionally breaks the Windows build — which is exactly what happened:
+/// this module compiled and its tests passed on macOS, while the release
+/// workflow failed on `x86_64-pc-windows-msvc` with
+/// `error[E0433]: failed to resolve: could not find 'unix' in 'os'`.
+///
+/// The dependency-visible behavior is to preserve an inner link as a link. On
+/// Windows the platform decides whether that needs a file or directory hint,
+/// so the target is inspected rather than guessed.
+#[allow(unused_variables)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        // A Windows symlink must declare whether it points at a file or a
+        // directory, and the target may not exist yet, so an existing target's
+        // type is used and a missing one is assumed to be a file.
+        let resolved = link.parent().map(|dir| dir.join(target));
+        let is_dir = resolved.as_deref().is_some_and(|path| path.is_dir());
+        if is_dir {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "symlinks are not supported on this platform",
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -339,8 +378,13 @@ mod tests {
         let worktree = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(workspace.path().join("vendor/bin")).unwrap();
         std::fs::write(workspace.path().join("real-tool"), "#!/bin/sh\n").unwrap();
-        std::os::unix::fs::symlink("../../real-tool", workspace.path().join("vendor/bin/tool"))
-            .unwrap();
+        // The platform-aware helper, not `std::os::unix`: this test failed to
+        // compile on Windows for the same reason the module did.
+        symlink(
+            Path::new("../../real-tool"),
+            &workspace.path().join("vendor/bin/tool"),
+        )
+        .unwrap();
 
         link_dependencies(workspace.path(), worktree.path(), &["vendor".into()], true).unwrap();
 

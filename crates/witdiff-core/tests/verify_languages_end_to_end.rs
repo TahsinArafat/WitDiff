@@ -149,6 +149,26 @@ fn git(repo: &Path, args: &[&str]) {
 }
 
 /// Whether a program is on PATH and runs.
+/// Mark a file executable, where that is a thing the platform has.
+///
+/// `std::os::unix::fs::PermissionsExt` does not exist on Windows, so using it
+/// unconditionally makes this test file fail to compile against
+/// `x86_64-pc-windows-msvc` — a release target. The Java and JavaScript
+/// fixtures need the bit only on Unix; on Windows the runner is invoked
+/// through its interpreter.
+fn make_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .expect("make runner executable");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 fn program_available(program: &str, probe: &[&str]) -> bool {
     StdCommand::new(program)
         .args(probe)
@@ -676,11 +696,7 @@ fn java_reaches_verified_end_to_end() {
         ("src/test/RunTests.java", JAVA_LAUNCHER),
         ("run_tests.sh", JAVA_RUNNER),
     ]);
-    fs::set_permissions(
-        project.root.join("run_tests.sh"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .expect("make runner executable");
+    make_executable(&project.root.join("run_tests.sh"));
     project.commit_base("buggy base");
 
     project.write("src/Calc.java", JAVA_FIXED);
@@ -762,11 +778,7 @@ fn java_structural_analysis_runs_under_a_wrapper_script_command() {
         ("src/test/RunTests.java", JAVA_LAUNCHER),
         ("run_tests.sh", JAVA_RUNNER),
     ]);
-    fs::set_permissions(
-        project.root.join("run_tests.sh"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .expect("make runner executable");
+    make_executable(&project.root.join("run_tests.sh"));
     project.commit_base("buggy base");
 
     // Keep the proof credible with a new regression test, and gut the existing

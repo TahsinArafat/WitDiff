@@ -453,8 +453,14 @@ fn the_integrations_installer_copies_only_present_harnesses() {
     std::fs::create_dir_all(&bin).expect("bin dir");
     let stub = bin.join("opencode");
     std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("write stub");
-    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .expect("chmod");
+    // `std::os::unix` does not exist on Windows, so the permission bit is set
+    // only where it means something. Without the guard this test fails to
+    // compile against `x86_64-pc-windows-msvc`, which is a release target.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
 
     // System tools must stay on PATH: the script needs `dirname` and `mktemp`
     // before it reaches any harness check, and a PATH of only the stub made it
