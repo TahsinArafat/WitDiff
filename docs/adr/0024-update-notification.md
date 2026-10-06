@@ -28,8 +28,8 @@ during verification.
   never on `verify`, `inspect` or `receipt` — none of which may touch the
   network.
 - It **prints a line at most**. It does not download, does not replace the
-  binary, and does not prompt. `install.sh --force` is the documented way to
-  take the update, and the notice names it.
+  binary, and does not prompt. The notice gives the full `curl ... | sh -s --
+  --force` command, so it can be pasted by someone who has only the binary.
 - Every failure is silent. No network, no `curl`, a timeout, malformed JSON,
   an unparseable tag: each returns "unavailable" and prints nothing.
 - Answers are cached for 24 hours under `$XDG_CACHE_HOME/witdiff/update-check`,
@@ -62,6 +62,14 @@ before the commit, which is the only reason it did not ship.
 
 **An unparseable version is not compared at all.** Treating it as `0.0.0` would
 make `doctor` announce an update to anyone whose version contained a typo.
+
+**The notice must name a command that works from any directory.** The first
+version said `install.sh --force`, which is a relative path: someone running an
+installed binary has no checkout, so it failed with "command not found" for
+precisely the person being told to update. The installer's own footer had the
+same defect — `To remove: install.sh --uninstall` — and now prints the URL form
+when it was piped in rather than invoked from a file. Asserted as a property:
+no token containing `.sh` may appear outside an absolute URL.
 
 **No new dependency.** The check shells out to `curl`, which `install.sh`
 already requires. Adding a TLS stack to the binary for a courtesy notice would

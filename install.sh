@@ -16,6 +16,10 @@
 set -eu
 
 REPO="TahsinArafat/WitDiff"
+# The canonical location of this script, so a hint can name a command the
+# reader can actually run — including when they installed via `curl | sh` and
+# have no local copy.
+INSTALL_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
 VERSION=""
 DEST=""
 UNINSTALL=0
@@ -275,10 +279,14 @@ echo "Next:"
 echo "  witdiff doctor                      # check the toolchain is usable"
 echo "  integrations/install.sh             # wire it into your coding agent"
 echo
-# $0 is the interpreter (often `sh`) when this is piped into a shell, so the
-# hint names the downloaded script rather than trusting $0.
-if [ -f "$0" ]; then
+# `$0` is the interpreter (often `sh`) when this is piped into a shell, so it
+# cannot be trusted to name the script. When there is no local copy — the
+# documented `curl | sh` path — the hint must give a command that works anyway:
+# telling the reader to run `install.sh --uninstall` when the file exists only
+# on GitHub is advice they cannot follow. The URL form always resolves.
+if [ -f "$0" ] && [ "$0" != "sh" ]; then
   echo "To remove: $0 --uninstall"
 else
-  echo "To remove: install.sh --uninstall   (keep a copy of this script to reuse it)"
+  echo "To remove:"
+  echo "  curl -fsSL $INSTALL_URL | sh -s -- --uninstall"
 fi

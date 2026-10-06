@@ -43,11 +43,17 @@ destination is reported, not escalated.
 <summary>Options, other platforms, and manual install</summary>
 
 ```bash
-./install.sh --version v1.0.0-alpha.3   # pin a release
-./install.sh --to /usr/local/bin        # choose the directory
-./install.sh --force                    # upgrade an existing install
-./install.sh --uninstall                # remove it
+# Every option through the same one-liner — no repository needed.
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --version v1.0.0-alpha.3
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --to /usr/local/bin
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --force
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --uninstall
 ```
+
+Cloning the repository instead makes the flags shorter: `./install.sh --help`
+after `git clone https://github.com/TahsinArafat/WitDiff`. Both forms are the
+same script and behave identically; the URL form is the one that works if you
+only have the binary.
 
 **Updating.** `witdiff doctor` prints the installed version and tells you when a
 newer release exists on your channel. It does not install anything, and it never

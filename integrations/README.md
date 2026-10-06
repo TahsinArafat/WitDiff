@@ -19,16 +19,15 @@ harness loads them.
 ## Install
 
 ```bash
-integrations/install.sh              # into the current project
-integrations/install.sh --global     # into your user config
-integrations/install.sh --uninstall  # remove only what this installed
+# From anywhere — no repository needed.
+URL=https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh
+curl -fsSL $URL | sh                          # into the current project
+curl -fsSL $URL | sh -s -- --global           # into your user config
+curl -fsSL $URL | sh -s -- --uninstall        # remove only what this installed
 ```
 
-Or from anywhere, without a checkout:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh | sh
-```
+From inside a clone the same script is a local file, so the flags are shorter:
+`integrations/install.sh --global`. Both forms behave identically.
 
 It installs only the harnesses you actually have, and it never overwrites a file
 you have edited — each skipped file is reported.
@@ -36,7 +35,7 @@ you have edited — each skipped file is reported.
 ## Uninstall
 
 ```bash
-integrations/install.sh --uninstall
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh | sh -s -- --uninstall
 ```
 
 Removes the four files it ships: the Claude Code skill, the OpenCode plugin and

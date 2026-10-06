@@ -38,6 +38,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The repository releases are read from.
 const REPO: &str = "TahsinArafat/WitDiff";
 
+/// Where the installer lives.
+///
+/// A full URL, not a relative path. Someone running an installed binary does
+/// not have the repository checked out, so `./install.sh` is not a command they
+/// can run — and `install.sh --force` is worse, because it looks runnable and
+/// fails with "command not found" for the exact user the notice is addressed
+/// to. The notice must name something that works from any directory.
+const INSTALL_URL: &str = "https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh";
+
 /// How long a cached answer stays usable.
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -233,8 +242,10 @@ fn write_cache(path: &Path, version: &str) {
 pub fn message(notice: &Notice) -> Option<String> {
     match notice {
         Notice::Available { installed, latest } => Some(format!(
-            "note: witdiff {latest} is available (installed {installed}). \
-             Run `install.sh --force` to update. Set WITDIFF_NO_UPDATE_CHECK=1 to silence this."
+            "note: witdiff {latest} is available (installed {installed}).\n\
+             \x20       Update with:\n\
+             \x20         curl -fsSL {INSTALL_URL} | sh -s -- --force\n\
+             \x20       Set WITDIFF_NO_UPDATE_CHECK=1 to silence this."
         )),
         _ => None,
     }
@@ -405,6 +416,11 @@ mod tests {
     /// The notice must name the remedy. A user told an update exists, with no
     /// documented way to take it, is being told about a problem rather than a
     /// solution — the same gap found in the installer's uninstall path.
+    /// The notice must name a command that works from any directory.
+    ///
+    /// It said `install.sh --force`, which is a relative path. A user running
+    /// an installed binary has no repository checked out, so that command fails
+    /// with "command not found" for precisely the person being told to update.
     #[test]
     fn the_notice_names_the_command_that_updates() {
         let text = message(&Notice::Available {
@@ -412,6 +428,52 @@ mod tests {
             latest: "1.0.0-alpha.3".into(),
         })
         .expect("a notice");
-        assert!(text.contains("install.sh --force"), "{text}");
+        assert!(text.contains(INSTALL_URL), "{text}");
+    }
+
+    /// No relative path may appear in the notice.
+    ///
+    /// Asserted as a property rather than for one known string: the failure was
+    /// `install.sh --force` being a path that only resolves inside a checkout,
+    /// and the next such mistake would be a different literal. Every command in
+    /// the notice must be reachable by someone who has only the binary.
+    #[test]
+    fn the_notice_never_names_a_path_that_needs_a_checkout() {
+        let text = message(&Notice::Available {
+            installed: "1.0.0-alpha.1".into(),
+            latest: "1.0.0-alpha.3".into(),
+        })
+        .expect("a notice");
+
+        for line in text.lines() {
+            let line = line.trim();
+            // A relative invocation: a bare word ending in `.sh`, or a `./`
+            // prefix, or a path that is not part of a URL.
+            assert!(
+                !line.starts_with("./"),
+                "a relative path cannot be run by someone without the repository: {line}"
+            );
+        }
+        // Every `.sh` mention must be inside an absolute URL.
+        for token in text.split_whitespace() {
+            if token.contains(".sh") {
+                assert!(
+                    token.starts_with("https://"),
+                    "`{token}` is a bare script reference; give the full URL"
+                );
+            }
+        }
+    }
+
+    /// Running the notice's own command must be possible from any directory.
+    #[test]
+    fn the_notice_command_is_absolute_and_forceful() {
+        let text = message(&Notice::Available {
+            installed: "1.0.0-alpha.1".into(),
+            latest: "1.0.0-alpha.3".into(),
+        })
+        .expect("a notice");
+        assert!(text.contains("curl -fsSL https://"), "{text}");
+        assert!(text.contains("| sh -s -- --force"), "{text}");
     }
 }
