@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.3
+
+PHP support, and two false-proof fixes. The headline is that PHP projects can now
+adopt WitDiff for its full value rather than for the proof alone; the second is
+that one of these fixes was itself the bug it was meant to remove.
 
 ### Added
 

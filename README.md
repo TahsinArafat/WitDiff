@@ -43,7 +43,7 @@ destination is reported, not escalated.
 <summary>Options, other platforms, and manual install</summary>
 
 ```bash
-./install.sh --version v1.0.0-alpha.2   # pin a release
+./install.sh --version v1.0.0-alpha.3   # pin a release
 ./install.sh --to /usr/local/bin        # choose the directory
 ./install.sh --uninstall                # remove it
 ```
@@ -52,7 +52,7 @@ destination is reported, not escalated.
 zip and verify it directly:
 
 ```powershell
-$V = "1.0.0-alpha.2"
+$V = "1.0.0-alpha.3"
 $u = "https://github.com/TahsinArafat/WitDiff/releases/download/v$V"
 Invoke-WebRequest "$u/witdiff-x86_64-pc-windows-msvc.zip" -OutFile witdiff.zip
 Invoke-WebRequest "$u/SHA256SUMS" -OutFile SHA256SUMS

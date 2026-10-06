@@ -19,4 +19,4 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 shell-words.workspace = true
-witdiff-core = { path = "../witdiff-core", version = "1.0.0-alpha.2" }
+witdiff-core = { path = "../witdiff-core", version = "1.0.0-alpha.3" }
