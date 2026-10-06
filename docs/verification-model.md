@@ -2,6 +2,41 @@
 
 WitDiff intentionally distinguishes **green**, **red**, **fresh**, and **integrity** evidence.
 
+## What `verified` means, and what it does not
+
+`verified` is a claim about **one specific thing**: the changed dedicated tests
+demonstrate a behavioral difference between the base revision and this one. The
+test passes here, and the same test fails on the base for a recognized
+test-failure reason.
+
+It is **not** a claim that the change is correct, complete, or what was asked
+for. Three consequences follow, and they are limits of the method rather than
+bugs to be fixed:
+
+- **A test that asserts something irrelevant is still verified.** WitDiff proves
+  that the test distinguishes the two revisions. If the test distinguishes them
+  by checking the wrong thing, the proof is real and the change is still wrong.
+  This is the most important limit: `verified` says the test is *credible*, not
+  that it is *sufficient*.
+- **Behavior never exercised by a test is not covered.** A user-facing outcome
+  confirmed by hand — a page rendering, a request returning the right body —
+  is evidence WitDiff cannot see and does not claim.
+- **It is a guard against false confidence, not a source of confidence.** The
+  question it answers is "could this test have passed without the change?", and
+  a `not_verified` answer is often the more valuable one, because it is the case
+  a green suite hides.
+
+Where the evidence is thinner than the word suggests, the receipt says so
+rather than rounding up. `verified_with_warnings` exists precisely because a
+proof can coexist with integrity findings; a `verified` with a stale fingerprint
+or an unstable run is never issued. See `docs/product.md` for the deliberate
+refusals, including any LLM-judged confidence score, which would be the same
+unfalsifiable claim this tool exists to reject.
+
+This is why `verified` is never inferred from a passing run. A green suite means
+the command exited 0; it does not mean anything was proven, and the two are
+distinguished everywhere in the receipt.
+
 ## HEAD green
 
 The configured command must exit successfully in the current workspace.

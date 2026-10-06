@@ -69,6 +69,39 @@ max_mutants_per_function = 5
 # flake_repeats = 3
 
 # ---------------------------------------------------------------------------
+# Dependencies in the base worktree
+# ---------------------------------------------------------------------------
+#
+# The base experiment runs in a `git worktree`, which contains only committed
+# files. A project that gitignores its dependency directory therefore cannot
+# start its test command on the base revision:
+#
+#   base control : FAIL
+#   stderr       : Could not open input file: vendor/bin/phpunit
+#
+# and the receipt reports "the pristine base revision does not pass the
+# configured test command", which blames the base for a failure that is really
+# a missing dependency directory.
+#
+# Listing a directory here copies it from the workspace into the worktree, so
+# the base experiment can start. It is a copy and never a symlink: a symlink
+# lets a generated file that computes a path relative to itself resolve back
+# into the workspace, and the base experiment would then run the head
+# revision's code. Measured: Composer's autoloader computes
+# `$baseDir = dirname($vendorDir)`, so a symlinked `vendor/` made the base run
+# head's sources and a test that must fail on the base reported `OK`.
+#
+# The copy is skipped when a dependency lockfile changed between the base
+# revision and the current one, because then the installed set is not the one
+# the base would have resolved and reusing it would be measuring the wrong
+# thing. The receipt says so when that happens.
+#
+# Opt-in: it changes what the base experiment executes.
+# base_dependency_dirs = ["vendor"]        # PHP / Composer
+# base_dependency_dirs = ["node_modules"]  # JavaScript
+# base_dependency_dirs = [".venv"]         # Python
+
+# ---------------------------------------------------------------------------
 # Sandboxed execution
 # ---------------------------------------------------------------------------
 #

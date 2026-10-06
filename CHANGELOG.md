@@ -4,6 +4,19 @@
 
 ### Added
 
+- **`verification.base_dependency_dirs`**, so the base experiment can start in a
+  project that gitignores its dependencies. A `git worktree` contains only
+  committed files, so a Composer/`npm`/Python project's base control previously
+  failed with `Could not open input file: vendor/bin/phpunit` and the receipt
+  blamed the base revision for a failure that was really missing dependencies.
+  Opt-in, and guarded by the lockfile: if a lockfile changed between base and
+  head, nothing is reused and the receipt says so. The dependencies are
+  **copied**, never symlinked — see Fixed.
+- **`assertion_free_test`**, for a newly added test that contains no assertion
+  and no exception expectation. `removed_assertion` only fires when the base
+  version had assertions, so a brand-new test that cannot fail was invisible.
+  Warning severity, deliberately not High: it reports without blocking, because
+  a repository may legitimately contain such a test.
 - **PHP support: PHPUnit and Pest.** A PHP project previously received the
   red/green proof but **no integrity findings at all** — the rules that catch a
   change weakening its own tests did not run. PHP now joins the shared rule
@@ -21,6 +34,14 @@
 
 ### Fixed
 
+- **The base experiment could run the *head* revision's code.** The first
+  implementation of `base_dependency_dirs` symlinked the workspace's dependency
+  directory into the base worktree. Composer's generated autoloader computes
+  `$baseDir = dirname($vendorDir)`, so through a symlink that resolved back to
+  the workspace: measured on a base computing `a - b` with a test asserting
+  `add(2, 3) == 5`, the base experiment reported `OK (2 tests, 2 assertions)`.
+  A false proof in the direction that hides a regression. Dependencies are now
+  copied.
 - **A gutted PHP test could reach `verified`.** A WordPress-style test whose only
   check is `expectException` was summarized with **zero assertions**, so deleting
   that guard was invisible to the integrity rules. Combined with a change that

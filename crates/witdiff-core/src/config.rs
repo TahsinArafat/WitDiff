@@ -540,6 +540,32 @@ mod tests {
             config.block_on_integrity_findings,
             "high-severity integrity findings must block verification by default"
         );
+        assert!(
+            config.base_dependency_dirs.is_empty(),
+            "base dependency reuse must be off by default: it changes what the \
+             base experiment executes"
+        );
+    }
+
+    /// Legacy configuration must keep parsing. A field added without a default
+    /// makes every existing `witdiff.toml` fail to load, which is a breaking
+    /// change to a file the user owns.
+    #[test]
+    fn a_config_without_base_dependency_dirs_still_parses() {
+        let parsed: Config =
+            toml::from_str("[verification]\ntest_command = [\"cargo\", \"test\"]\n")
+                .expect("a config written before this field existed must still load");
+        assert!(parsed.verification.base_dependency_dirs.is_empty());
+    }
+
+    #[test]
+    fn base_dependency_dirs_round_trip() {
+        let source = "[verification]\nbase_dependency_dirs = [\"vendor\", \"node_modules\"]\n";
+        let parsed: Config = toml::from_str(source).expect("parse");
+        assert_eq!(
+            parsed.verification.base_dependency_dirs,
+            vec!["vendor".to_string(), "node_modules".to_string()]
+        );
     }
 
     #[test]

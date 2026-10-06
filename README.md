@@ -237,6 +237,28 @@ annotates pull requests, and an [MCP server](crates/witdiff-mcp) exposing
 5. **Vendor integrations are thin wrappers around the same core CLI and API.**
 6. **Unknown evidence is reported as unknown; never silently upgraded to proof.**
 
+### What `verified` does not mean
+
+`verified` means one specific thing: **the changed tests demonstrate a
+behavioral difference between the base revision and this one.** The test passes
+here and fails on the base for a recognized test-failure reason.
+
+It does not mean the change is correct, complete, or what you asked for.
+
+- A test that **asserts something irrelevant is still verified**. WitDiff proves
+  the test distinguishes the two revisions; if it distinguishes them by checking
+  the wrong thing, the proof is real and the change is still wrong.
+- **Behavior no test exercises is not covered.** A page rendering, a request
+  returning the right body — confirmed by hand — is evidence WitDiff cannot see
+  and does not claim.
+- It is **a guard against false confidence, not a source of confidence**. The
+  question it answers is "could this test have passed without the change?", and
+  `not_verified` is often the more useful answer, because it is the case a green
+  suite hides.
+
+Where the evidence is thinner than the word suggests, the receipt says so rather
+than rounding up. See [`docs/verification-model.md`](docs/verification-model.md).
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).

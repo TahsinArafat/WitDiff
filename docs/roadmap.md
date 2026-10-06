@@ -99,17 +99,17 @@ Still open:
   the receipt says `full_suite`.
 - **Mutation** outside Rust; the operators are defined over Rust syntax.
 
-- **Gitignored dependencies in the base worktree.** The base experiment runs in
-  a `git worktree`, which contains only committed files. A project whose
-  dependencies are gitignored (`vendor/`, `node_modules/`, `.venv/`) therefore
-  cannot start its test command on the base revision, and the receipt reports
-  `base control: FAIL` — which reads as "the base is broken" rather than "the
-  base could not start". Affects every language; measured on PHP. Fixing it
-  means deciding what the base experiment executes, which is a semantic change
-  to verification rather than a language addition.
+Closed since:
 
-See `docs/support-matrix.md` for the per-language detail, including what .NET
-and TypeScript would each require. PHP shipped in ADR-0023.
+- [x] **Gitignored dependencies in the base worktree.** `git worktree` contains
+  only committed files, so a project whose dependencies are gitignored
+  (`vendor/`, `node_modules/`, `.venv/`) could not start its test command on the
+  base revision, and the receipt reported `base control: FAIL` — which reads as
+  "the base is broken" rather than "the base could not start". Closed by
+  `verification.base_dependency_dirs`, opt-in and guarded by the lockfile. The
+  dependencies are **copied**, not symlinked: a symlink let Composer's
+  autoloader resolve `dirname(vendor)` back to the workspace, so the base
+  experiment ran head's code. Measured, then fixed.
 
 ## M5 — ecosystem integrations
 
