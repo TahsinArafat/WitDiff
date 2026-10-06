@@ -15,9 +15,41 @@ The receipt records:
 - BASE+changed-tests command/evidence;
 - red/green decision;
 - final conservative status;
+- a machine-readable `reason` naming *why* that status was reached;
 - human-readable notes for unsupported/ambiguous cases.
 
 Consumers should prefer enum/status fields over parsing notes or stdout.
+
+## `reason`: why, not just what
+
+`status` says what happened. `reason` says why, as one stable token, because
+`not_verified` alone covers several unrelated causes with different remedies:
+
+| `reason` | What happened | What to do |
+| --- | --- | --- |
+| `proven` | The changed tests distinguish the two revisions | Nothing |
+| `proven_with_integrity_warnings` | Proven, but the change weakened its own tests | Read the findings |
+| `base_also_passes` | The tests pass on the base too, so they pin nothing | Strengthen the assertion |
+| `base_control_failed` | The pristine base does not pass the command | Fix or re-target the base |
+| `base_control_timed_out` | The base control exceeded its timeout | Raise `timeout_secs` or fix the hang |
+| `test_did_not_compile_on_base` | The transplanted test needs an API this change adds | Split the change |
+| `experiment_unstable` | A run disagreed with itself | Find the flake |
+| `blocked_by_integrity_finding` | Behaviour was proven but a `High` finding blocks it | Address the finding |
+| `partial_transplant` | Some changed tests could not be transplanted | Read `notes` for which |
+| `base_experiment_timed_out` | The base+test run did not terminate | Fix the hang |
+| `unrecognized_failure_kind` | The failure is not one the framework's classifier knows | Check `framework`, or the runner's output vocabulary |
+| `head_tests_failed` | The command already fails on this workspace | Fix that first |
+| `test_command_unavailable` | The command could not be started | Install the toolchain, or configure `base_dependency_dirs` |
+| `no_dedicated_tests_changed` | No test file changed, so nothing was attempted | Not a failure; gate with `--fail-on-no-changed-tests` |
+| `unrecorded` | A receipt written before this field existed | Nothing; the field claims nothing |
+
+An agent should branch on this token rather than matching the prose in `notes`:
+the notes are for humans and their wording is not part of the contract. The MCP
+`verify` tool returns `reason`, `reason_is_actionable_by_author` and
+`remediation` directly, so a client needs no parsing at all.
+
+`unrecorded` is the default for a receipt written before the field existed. It
+deliberately claims nothing, rather than guessing at a reason from the status.
 
 See `schemas/witdiff.receipt.v1.schema.json`.
 

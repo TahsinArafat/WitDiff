@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Every receipt carries a machine-readable `reason`.** `status` said what
+  happened; `reason` says why, as one stable token. `not_verified` alone covered
+  four unrelated causes with four different remedies, so an agent had to
+  string-match the English in `notes` to decide what to do — and rewording a
+  note would silently change the meaning. The token is printed by `verify`
+  (human and JSON), returned by the MCP `verify` tool alongside
+  `reason_is_actionable_by_author` and `remediation`, documented in
+  `docs/receipt.md`, and enumerated in the receipt schema. Additive in v1:
+  a receipt written before the field exists reads as `unrecorded`, which claims
+  nothing. See ADR-0025.
 - **`witdiff doctor` reports the installed version and, when a newer release
   exists on the same channel, says so.** It never installs anything and never
   runs during `verify` — see ADR-0024. Silent when offline, cached for a day

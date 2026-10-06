@@ -654,6 +654,10 @@ fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> 
 fn print_receipt_summary(receipt: &Receipt) {
     println!("WitDiff verification");
     println!("  status           : {}", receipt.status);
+    // The machine-readable why, printed even in the human view: an agent that
+    // reads the terminal rather than the JSON needs the same token, and the
+    // prose in `notes` is not a contract.
+    println!("  reason           : {}", receipt.reason.as_str());
     println!("  base             : {}", receipt.base);
     println!("  head             : {}", receipt.head_commit);
     println!("  changed tests    : {}", receipt.changed_test_files.len());

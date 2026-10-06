@@ -33,3 +33,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
   library, covering both PHPUnit methods and Pest closures
 - ADR-0024: updates are notified, never installed, and never checked during
   verification — the offline guarantee stays intact
+- ADR-0025: every receipt carries a machine-readable `reason`, so an agent
+  branches on a token instead of parsing prose

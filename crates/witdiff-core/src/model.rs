@@ -153,6 +153,96 @@ pub enum VerificationStatus {
 /// actual head was `62ec3f5`, with no warning. A reader had to notice the
 /// mismatch themselves, and nothing in the output encouraged them to look
 /// (ADR-0015 finding 3, backlog PG-504).
+/// Why a verification reached its status.
+///
+/// One token per distinct cause, because the causes have different remedies and
+/// a caller that cannot tell them apart cannot act. `not_verified` in
+/// particular covers several unrelated situations: a test that proves nothing,
+/// a base that never ran, a flaky experiment, and a blocked integrity finding.
+///
+/// This is a machine-facing contract: the tokens are stable and covered by the
+/// receipt schema. The human-readable explanation stays in `notes`; this says
+/// which one it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reason {
+    /// The proof succeeded.
+    Proven,
+    /// Proven, but the change weakened its own tests.
+    ProvenWithIntegrityWarnings,
+    /// The changed tests also pass on the base revision, so they distinguish
+    /// nothing. The remedy is a stronger assertion.
+    BaseAlsoPasses,
+    /// The pristine base revision did not pass the configured command, so no
+    /// later failure can be attributed to the changed tests. The remedy is to
+    /// fix or re-target the base.
+    BaseControlFailed,
+    /// The base control run exceeded its timeout.
+    BaseControlTimedOut,
+    /// The transplanted test does not compile against the base revision,
+    /// usually because it calls an API this change adds. The remedy is to split
+    /// the change.
+    TestDidNotCompileOnBase,
+    /// A run in the experiment disagreed with itself, so nothing it observed is
+    /// evidence. The remedy is to find the flake.
+    ExperimentUnstable,
+    /// Red/green behaviour was observed but a high-severity integrity finding
+    /// blocks the verdict. The remedy is to address the finding.
+    BlockedByIntegrityFinding,
+    /// Red/green behaviour was observed from a partial transplant, which cannot
+    /// speak for the files it excluded.
+    PartialTransplant,
+    /// The base-plus-tests run did not terminate.
+    BaseExperimentTimedOut,
+    /// The base-plus-tests run failed, but not in a way the configured
+    /// framework's classifier recognises as a test failure. Usually a wrong
+    /// `framework`, or a runner whose output vocabulary is unknown.
+    UnrecognizedFailureKind,
+    /// The test command fails on the current workspace already.
+    HeadTestsFailed,
+    /// The test command could not be started at all.
+    TestCommandUnavailable,
+    /// No dedicated test file changed, so nothing was attempted.
+    NoDedicatedTestsChanged,
+    /// A receipt written before this field existed.
+    #[default]
+    Unrecorded,
+}
+
+impl Reason {
+    /// The stable token, matching the serialized form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Proven => "proven",
+            Self::ProvenWithIntegrityWarnings => "proven_with_integrity_warnings",
+            Self::BaseAlsoPasses => "base_also_passes",
+            Self::BaseControlFailed => "base_control_failed",
+            Self::BaseControlTimedOut => "base_control_timed_out",
+            Self::TestDidNotCompileOnBase => "test_did_not_compile_on_base",
+            Self::ExperimentUnstable => "experiment_unstable",
+            Self::BlockedByIntegrityFinding => "blocked_by_integrity_finding",
+            Self::PartialTransplant => "partial_transplant",
+            Self::BaseExperimentTimedOut => "base_experiment_timed_out",
+            Self::UnrecognizedFailureKind => "unrecognized_failure_kind",
+            Self::HeadTestsFailed => "head_tests_failed",
+            Self::TestCommandUnavailable => "test_command_unavailable",
+            Self::NoDedicatedTestsChanged => "no_dedicated_tests_changed",
+            Self::Unrecorded => "unrecorded",
+        }
+    }
+
+    /// Whether this reason means the change *could* be proven and simply is not
+    /// yet, as opposed to a defect in the change or its tests.
+    ///
+    /// The distinction is what an agent needs most: a fixable absence of effort
+    /// versus something actually wrong. `unrecognized_failure_kind` is the
+    /// awkward one — it usually means the configuration, not the code, so it is
+    /// reported as fixable but names the configuration as the likely cause.
+    pub fn is_actionable_by_author(self) -> bool {
+        matches!(self, Self::BaseAlsoPasses | Self::NoDedicatedTestsChanged)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReceiptFreshness {
     /// The receipt describes the current state.
@@ -532,6 +622,19 @@ pub struct Receipt {
     pub base_run: Option<RunResult>,
     pub red_green_proven: bool,
     pub notes: Vec<String>,
+    /// Why the verification reached this status, as a stable token.
+    ///
+    /// `status` says *what* happened; this says *why*, and it exists because
+    /// `not_verified` alone covers four different causes with four different
+    /// remedies. An agent reading the receipt had to string-match the prose in
+    /// `notes` to decide what to do, which is exactly the kind of
+    /// interpretation this project exists to remove — and a reworded note would
+    /// silently change the meaning.
+    ///
+    /// Additive in v1: a receipt written before this field existed deserializes
+    /// as [`Reason::Unrecorded`], which claims nothing about why.
+    #[serde(default)]
+    pub reason: Reason,
     /// Which test command variant actually produced `head_run` and `base_run`.
     ///
     /// Additive in v1: a receipt written before this field existed deserializes
@@ -1418,5 +1521,174 @@ mod freshness_tests {
         assert_eq!(short("abcdefghijklmnop"), "abcdefghijkl");
         assert_eq!(short("abc"), "abc");
         assert_eq!(short(""), "");
+    }
+
+    /// Every reason has a stable token, and every token round-trips.
+    ///
+    /// The tokens are a machine contract: an agent branches on them. A typo or
+    /// a renamed variant would silently change what a caller does, so the
+    /// serialized form is asserted rather than assumed.
+    #[test]
+    fn reason_tokens_round_trip() {
+        let all = [
+            Reason::Proven,
+            Reason::ProvenWithIntegrityWarnings,
+            Reason::BaseAlsoPasses,
+            Reason::BaseControlFailed,
+            Reason::BaseControlTimedOut,
+            Reason::TestDidNotCompileOnBase,
+            Reason::ExperimentUnstable,
+            Reason::BlockedByIntegrityFinding,
+            Reason::PartialTransplant,
+            Reason::BaseExperimentTimedOut,
+            Reason::UnrecognizedFailureKind,
+            Reason::HeadTestsFailed,
+            Reason::TestCommandUnavailable,
+            Reason::NoDedicatedTestsChanged,
+            Reason::Unrecorded,
+        ];
+        for reason in all {
+            let token = reason.as_str();
+            let json = serde_json::to_string(&reason).expect("serialize");
+            assert_eq!(
+                json,
+                format!("\"{token}\""),
+                "the token and the serialized form must agree for {reason:?}"
+            );
+            let back: Reason = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, reason);
+        }
+    }
+
+    /// A receipt written before this field existed must still parse, and must
+    /// claim nothing about why.
+    #[test]
+    fn a_receipt_without_a_reason_deserializes_as_unrecorded() {
+        let json = r#"{"schema_version":"witdiff.receipt.v1","generated_at":"x",
+            "status":"not_verified","repo_root":"/tmp","base":"HEAD~1","head_commit":"abc",
+            "workspace_fingerprint_before":"a","workspace_fingerprint_after":"a",
+            "evidence_fresh":true,"changed_files":[],"changed_test_files":[],
+            "integrity_findings":[],"red_green_proven":false,"notes":[],
+            "head_run":{"command":[],"cwd":"/tmp","success":true,"exit_code":0,
+            "duration_ms":0,"stdout":"","stderr":"","failure_kind":null,
+            "timed_out":false,"stability":"single_run","repeats":1}}"#;
+        let receipt: Receipt = serde_json::from_str(json).expect("legacy receipt parses");
+        assert_eq!(reason_of(&receipt), Reason::Unrecorded);
+    }
+
+    fn reason_of(receipt: &Receipt) -> Reason {
+        receipt.reason
+    }
+
+    /// The tokens must not collide, or two causes become indistinguishable.
+    #[test]
+    fn reason_tokens_are_distinct() {
+        let tokens = [
+            Reason::Proven.as_str(),
+            Reason::ProvenWithIntegrityWarnings.as_str(),
+            Reason::BaseAlsoPasses.as_str(),
+            Reason::BaseControlFailed.as_str(),
+            Reason::BaseControlTimedOut.as_str(),
+            Reason::TestDidNotCompileOnBase.as_str(),
+            Reason::ExperimentUnstable.as_str(),
+            Reason::BlockedByIntegrityFinding.as_str(),
+            Reason::PartialTransplant.as_str(),
+            Reason::BaseExperimentTimedOut.as_str(),
+            Reason::UnrecognizedFailureKind.as_str(),
+            Reason::HeadTestsFailed.as_str(),
+            Reason::TestCommandUnavailable.as_str(),
+            Reason::NoDedicatedTestsChanged.as_str(),
+            Reason::Unrecorded.as_str(),
+        ];
+        let unique: std::collections::BTreeSet<_> = tokens.iter().collect();
+        assert_eq!(unique.len(), tokens.len(), "reason tokens must be unique");
+    }
+
+    /// The schema's `reason` enum and the Rust enum must not drift.
+    ///
+    /// Two hand-maintained lists that describe the same set will diverge, and
+    /// the failure is silent: a client validating against the schema would
+    /// reject a token the tool actually emits. The schema is read here and
+    /// every one of its tokens must deserialize into a real variant.
+    #[test]
+    fn the_schema_reason_enum_matches_the_rust_enum() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|crates| crates.parent())
+            .map(|root| root.join("schemas/witdiff.receipt.v1.schema.json"))
+            .expect("schema path");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let schema: serde_json::Value = serde_json::from_str(&text).expect("schema is JSON");
+        let tokens: Vec<String> = schema["properties"]["reason"]["enum"]
+            .as_array()
+            .expect("reason enum")
+            .iter()
+            .map(|v| v.as_str().expect("a string token").to_owned())
+            .collect();
+
+        for token in &tokens {
+            let parsed: Reason = serde_json::from_value(serde_json::Value::String(token.clone()))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "the schema names `{token}`, which the Rust \
+                        enum cannot deserialize: {error}"
+                    )
+                });
+            assert_eq!(
+                parsed.as_str(),
+                token,
+                "token and serialized form must agree"
+            );
+        }
+
+        // And the reverse: every variant must appear in the schema, or a real
+        // token would fail a client's validation.
+        for reason in [
+            Reason::Proven,
+            Reason::ProvenWithIntegrityWarnings,
+            Reason::BaseAlsoPasses,
+            Reason::BaseControlFailed,
+            Reason::BaseControlTimedOut,
+            Reason::TestDidNotCompileOnBase,
+            Reason::ExperimentUnstable,
+            Reason::BlockedByIntegrityFinding,
+            Reason::PartialTransplant,
+            Reason::BaseExperimentTimedOut,
+            Reason::UnrecognizedFailureKind,
+            Reason::HeadTestsFailed,
+            Reason::TestCommandUnavailable,
+            Reason::NoDedicatedTestsChanged,
+            Reason::Unrecorded,
+        ] {
+            assert!(
+                tokens.contains(&reason.as_str().to_owned()),
+                "`{}` is emitted by the tool but missing from the schema",
+                reason.as_str()
+            );
+        }
+    }
+
+    /// Additive in v1: `reason` must not be required, or every receipt written
+    /// before it existed fails validation.
+    #[test]
+    fn the_schema_does_not_require_reason() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|crates| crates.parent())
+            .map(|root| root.join("schemas/witdiff.receipt.v1.schema.json"))
+            .expect("schema path");
+        let schema: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("JSON");
+        let required: Vec<String> = schema["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .map(|v| v.as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert!(
+            !required.contains(&"reason".to_owned()),
+            "adding `reason` to `required` would break every older receipt"
+        );
     }
 }

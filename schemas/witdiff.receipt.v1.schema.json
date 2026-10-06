@@ -176,6 +176,27 @@
           "description": "The verification_digest this signature covers."
         }
       }
+    },
+    "reason": {
+      "description": "Why the verification reached this status, as a stable token. `status` says what happened; this says why. Defaults to `unrecorded` for receipts written before the field existed.",
+      "type": "string",
+      "enum": [
+        "proven",
+        "proven_with_integrity_warnings",
+        "base_also_passes",
+        "base_control_failed",
+        "base_control_timed_out",
+        "test_did_not_compile_on_base",
+        "experiment_unstable",
+        "blocked_by_integrity_finding",
+        "partial_transplant",
+        "base_experiment_timed_out",
+        "unrecognized_failure_kind",
+        "head_tests_failed",
+        "test_command_unavailable",
+        "no_dedicated_tests_changed",
+        "unrecorded"
+      ]
     }
   },
   "$defs": {

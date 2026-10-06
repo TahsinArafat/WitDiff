@@ -285,6 +285,12 @@ impl Server {
             "gate": gate.as_str(),
             "passed": gate.passes(),
             "status": receipt.status.as_str(),
+            // The machine-readable why, so a client branches on a token rather
+            // than parsing the prose in `notes` to work out which of several
+            // unrelated causes applied.
+            "reason": receipt.reason.as_str(),
+            "reason_is_actionable_by_author": receipt.reason.is_actionable_by_author(),
+            "remediation": receipt.status.remediation(),
             "gate_reason": receipt.gate_reason(&policy),
             "receipt": receipt,
         }))

@@ -178,14 +178,20 @@ pub fn verify_repository(
     let mut base_control_run = None;
     let mut base_run = None;
     let mut red_green_proven = false;
+    // The machine-readable "why", parallel to `notes`. Set at each branch that
+    // decides a status, so a caller never has to parse the prose.
+    let mut reason = crate::model::Reason::Unrecorded;
     let mut status = if missing_program.is_some() {
         // No experiment: a proof requires the command to run.
+        reason = crate::model::Reason::TestCommandUnavailable;
         VerificationStatus::NotVerified
     } else if !head_run.success {
+        reason = crate::model::Reason::HeadTestsFailed;
         VerificationStatus::HeadFailed
     } else if inspect.changed_test_files.is_empty() && inspect.inline_test_hints.is_empty() {
         // With no dedicated test *and* no inline-test candidate there is
         // nothing to transplant, so no experiment can be run.
+        reason = crate::model::Reason::NoDedicatedTestsChanged;
         VerificationStatus::NoChangedTests
     } else {
         let tmp = TempDir::new().context("failed to allocate temporary verification directory")?;
@@ -309,8 +315,16 @@ pub fn verify_repository(
             }
             Ok(control) => {
                 if control.timed_out {
+                    reason = crate::model::Reason::BaseControlTimedOut;
                     notes.push("the pristine base revision exceeded the configured timeout, so WitDiff cannot attribute a later failure to the changed tests".into());
+                } else if control.is_missing_program() {
+                    // Distinct from "the base failed its tests": the command
+                    // never started, so the receiver's remedy is the toolchain
+                    // or the dependency directory, not the code.
+                    reason = crate::model::Reason::TestCommandUnavailable;
+                    notes.push("the configured test command could not be started in the base worktree, so no comparison was possible".into());
                 } else {
+                    reason = crate::model::Reason::BaseControlFailed;
                     notes.push("the pristine base revision does not pass the configured test command, so WitDiff cannot attribute a later failure to the changed tests".into());
                 }
                 base_control_run = Some(control);
@@ -363,6 +377,7 @@ pub fn verify_repository(
                             .iter()
                             .any(|f| f.severity == Severity::High);
                         if flaky {
+                            reason = crate::model::Reason::ExperimentUnstable;
                             notes.push(
                                 "red/green behavior was observed, but a run in the \
                                  experiment did not give the same answer twice, so the \
@@ -371,32 +386,40 @@ pub fn verify_repository(
                             );
                             VerificationStatus::NotVerified
                         } else if config.verification.block_on_integrity_findings && has_high {
+                            reason = crate::model::Reason::BlockedByIntegrityFinding;
                             notes.push("red/green behavior was observed, but high-severity test-integrity findings block verification".into());
                             VerificationStatus::NotVerified
                         } else if !blocked_tests.is_empty() {
                             // Proof came from a partial transplant. The
                             // experiment cannot speak for the excluded files.
+                            reason = crate::model::Reason::PartialTransplant;
                             notes.push("red/green behavior was observed, but not every changed test could be transplanted, so the result is not a complete proof".into());
                             VerificationStatus::NotVerified
                         } else if integrity_findings.is_empty() {
+                            reason = crate::model::Reason::Proven;
                             VerificationStatus::Verified
                         } else {
+                            reason = crate::model::Reason::ProvenWithIntegrityWarnings;
                             VerificationStatus::VerifiedWithWarnings
                         }
                     }
                     Some(FailureKind::CompileError) if !result.success => {
+                        reason = crate::model::Reason::TestDidNotCompileOnBase;
                         notes.push("the transplanted test did not compile against the base revision; v0.1 treats compile failure as incompatible rather than behavioral red/green proof".into());
                         VerificationStatus::BaseIncompatible
                     }
                     Some(FailureKind::Timeout) if !result.success => {
+                        reason = crate::model::Reason::BaseExperimentTimedOut;
                         notes.push("the base + changed-tests run exceeded the configured timeout; a suite that does not terminate cannot demonstrate a behavioral regression".into());
                         VerificationStatus::NotVerified
                     }
                     _ if result.success => {
+                        reason = crate::model::Reason::BaseAlsoPasses;
                         notes.push("changed tests also pass on the base revision; they do not prove the behavioral change".into());
                         VerificationStatus::NotVerified
                     }
                     _ => {
+                        reason = crate::model::Reason::UnrecognizedFailureKind;
                         notes.push("base+changed-tests command failed, but not with a recognized test assertion failure".into());
                         VerificationStatus::NotVerified
                     }
@@ -675,6 +698,7 @@ pub fn verify_repository(
         base_control_run,
         base_run,
         red_green_proven,
+        reason,
         notes,
         test_selection,
         effective_test_command,
