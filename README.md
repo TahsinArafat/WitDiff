@@ -131,8 +131,9 @@ none it installs all of them, because "not on my `PATH`" is not the same as "not
 used"; `WITDIFF_INSTALL_ALL=1` forces every one.
 
 ```bash
-integrations/install.sh --global      # user config instead of this project
-integrations/install.sh --uninstall   # remove only what it installed
+U=https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh
+curl -fsSL $U | sh -s -- --global     # user config instead of this project
+curl -fsSL $U | sh -s -- --uninstall  # remove only what it installed
 ```
 
 It never overwrites a file you have edited, and it installs nothing you do not
@@ -141,8 +142,17 @@ have. See [`integrations/`](integrations) for what each harness gets.
 ### Uninstall
 
 ```bash
-install.sh --uninstall              # the binary
-integrations/install.sh --uninstall # the agent packages
+witdiff uninstall                    # the binary, and its agent packages
+witdiff uninstall --keep-integrations
+```
+
+`witdiff uninstall` needs no script and no download: the binary removes
+itself. If you have already deleted it, or want to remove the agent packages
+on their own:
+
+```bash
+U=https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/integrations/install.sh
+curl -fsSL $U | sh -s -- --uninstall
 ```
 
 Both remove only what they installed, and both report what they removed. Files

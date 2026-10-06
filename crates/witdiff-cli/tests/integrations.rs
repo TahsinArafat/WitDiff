@@ -998,3 +998,43 @@ fn the_installer_never_requires_a_local_script() {
         }
     }
 }
+
+/// The README must not tell a user to run a script they do not have.
+///
+/// Reported twice from a real shell — `zsh: command not found: install.sh` —
+/// and both times the installer's own output was fixed while the README kept
+/// the same mistake. A bare `install.sh` only resolves inside a checkout, and
+/// the documented install path is `curl ... | sh`, which saves no copy.
+///
+/// Asserted over the whole file rather than for known strings: the first
+/// instance was `./install.sh --version`, the second `integrations/install.sh
+/// --uninstall`, and a third would be a different literal.
+#[test]
+fn the_readme_never_names_a_script_the_user_is_not_guaranteed_to_have() {
+    let root = integrations().parent().expect("repository root").to_owned();
+    let text = std::fs::read_to_string(root.join("README.md")).expect("read README");
+
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        // Prose about the repository's own layout is not an instruction.
+        if trimmed.starts_with("Cloning the repository") {
+            continue;
+        }
+        // A URL always resolves; anything containing `http` is fine.
+        if trimmed.contains("http") {
+            continue;
+        }
+        // A shell command is a line starting with the script name, with or
+        // without a path prefix. Running one requires a local copy.
+        let starts_with_script = trimmed.starts_with("./install.sh")
+            || trimmed.starts_with("install.sh")
+            || trimmed.starts_with("./integrations/install.sh")
+            || trimmed.starts_with("integrations/install.sh")
+            || trimmed.starts_with("./integrations/install.sh");
+        assert!(
+            !starts_with_script,
+            "README line {} runs a script the reader may not have: {trimmed}",
+            index + 1
+        );
+    }
+}
