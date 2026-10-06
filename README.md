@@ -47,7 +47,14 @@ destination is reported, not escalated.
 curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --version v1.0.0-alpha.4
 curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --to /usr/local/bin
 curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --force
-curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --uninstall
+```
+
+Once installed, the binary can remove itself — no copy of the script needed:
+
+```bash
+witdiff uninstall                    # the binary and its agent integrations
+witdiff uninstall --keep-integrations
+witdiff uninstall --dry-run          # show what would go
 ```
 
 Cloning the repository instead makes the flags shorter: `./install.sh --help`

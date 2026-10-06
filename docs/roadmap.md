@@ -182,6 +182,79 @@ Shipped so far in M6:
   toolchain, because which one a project needs cannot be inferred.
 
 
+## M7 — agent-facing contract
+
+WitDiff's primary callers are coding agents, not people reading a terminal. That
+changes what "finished" means: a verdict an agent cannot act on is a verdict it
+will ignore, and an agent that ignores a `not_verified` is worse served than one
+that never ran the tool.
+
+- [x] machine-readable `reason` on every receipt (ADR-0025)
+- [x] `[policy]` for waiving a rule's effect on the gate (ADR-0026)
+- [x] self-uninstalling binary, so no user needs a copy of the install script
+- [ ] a `reasons.md` page an agent can be pointed at, mirroring `docs/receipt.md`
+- [ ] exit-code and reason coverage in every harness skill, asserted rather than
+      assumed
+
+Shipped so far in M7:
+
+- **`reason`** — one stable token per cause, because `not_verified` alone covered
+  four unrelated situations with four different remedies. Before it, an agent
+  had to substring-match the prose in `notes` to decide what to do, which meant
+  rewording a note silently changed a caller's behaviour. Deliberately distinct:
+  `test_command_unavailable` and `base_control_failed` both end in
+  `not_verified`, and one is a toolchain problem while the other is the code.
+- **`[policy]`** — a repository with a legitimate exception could previously
+  only leave its gate red forever or stop running WitDiff. It can now record the
+  decision, with the constraint that a waiver changes the verdict and never the
+  observation: the finding stays in `integrity_findings` at its severity, and
+  the receipt lists it in `waivers` with the reason.
+- **`witdiff uninstall`** — measured from a real shell: the installer printed
+  `install.sh --uninstall`, but the documented install path is `curl ... | sh`,
+  which saves no copy, and the command answered `zsh: command not found:
+  install.sh`. Anything a user must run to undo an install has to work with what
+  the install left behind.
+
+## M8 — closing the language gap
+
+Three capabilities are Rust-only. Each is a real reduction in value for a
+non-Rust project, and each is documented in `docs/support-matrix.md` rather than
+quietly omitted.
+
+- [ ] **Targeted test invocation outside Rust.** Cargo's `--test <target>` is
+      implemented (ADR-0008); every other framework runs the full suite and the
+      receipt says `full_suite`. Narrowing must be provably equivalent to what
+      the framework would otherwise run, or it must refuse. ADR-0008 is the
+      precedent: the mechanism exists, and refusing is a correct answer.
+- [ ] **Mutation outside Rust.** The operators are defined over Rust syntax
+      (ADR-0011). Other languages get red/green proof and structural analysis
+      but no mutation signal, which is the strongest evidence WitDiff produces.
+- [ ] **Mock substitution around changed behaviour**, the last item from the
+      original integrity list.
+
+## M9 — trust and distribution
+
+- [ ] **A benchmark against real agent-generated pull requests.** The question
+      "how often does this catch a vacuous test?" has an honest answer only with
+      a corpus. No number has been published, and none should be invented —
+      a fabricated figure would be exactly the unfalsifiable claim this project
+      refuses elsewhere.
+- [ ] **Exercise the release pipeline with a stable tag.** Every release so far
+      is a pre-release, and the publish job has twice been cancelled while
+      queued on macOS and Windows runners. A stable `v1.0.0` should be cut only
+      once a second and third release have gone through cleanly.
+- [ ] **Run one verification inside `sandbox_image` end to end.** The runner is
+      implemented and tested for container naming, removal and environment
+      allow-listing, but a full verification inside a sandbox needs an image
+      carrying a Rust toolchain and none is available locally. Until then the
+      claim is "the rewrite is correct", not "a sandboxed verification works".
+- [ ] **Signed releases.** Receipts can be signed (ADR-0022); the binaries that
+      produce them are not. A signature over the artifact a user downloads is
+      the missing half.
+- [ ] **PHP in CI.** Three end-to-end tests skip without `WITDIFF_PHPUNIT_VENDOR`
+      set, and CI has no PHP step, so the PHP path is exercised locally rather
+      than on every change.
+
 ## Explicitly postponed
 
 - cloud control plane;

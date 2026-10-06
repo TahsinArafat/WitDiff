@@ -12,6 +12,14 @@ the gate, and an update notice that names a command you can actually run.
 
 ### Added
 
+- **`witdiff uninstall`.** The binary can now remove itself and the agent
+  integrations it installed, with `--dry-run` and `--keep-integrations`. The
+  installer had printed `install.sh --uninstall`, but the documented install
+  path is `curl ... | sh`, which saves no copy of the script: measured from a
+  real shell, that command answered `zsh: command not found: install.sh`.
+  Anything a user must run to undo an install has to work with what the install
+  left behind. It removes only what WitDiff created — a skill the user wrote is
+  reported and left alone.
 - **`[policy]` in `witdiff.toml`: per-rule weights and path ignores.** A
   repository can now record that it has accepted a particular weakening, or
   that a directory's findings are not its own, instead of leaving the gate red.

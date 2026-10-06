@@ -20,6 +20,7 @@ REPO="TahsinArafat/WitDiff"
 # reader can actually run — including when they installed via `curl | sh` and
 # have no local copy.
 INSTALL_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
+INTEGRATIONS_URL="https://raw.githubusercontent.com/${REPO}/main/integrations/install.sh"
 VERSION=""
 DEST=""
 UNINSTALL=0
@@ -170,7 +171,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
   esac
   echo
   echo "The agent integrations are separate. To remove those:"
-  echo "  integrations/install.sh --uninstall"
+  echo "  curl -fsSL $INTEGRATIONS_URL | sh -s -- --uninstall"
+  echo "  (from a checkout: ./integrations/install.sh --uninstall)"
   exit 0
 fi
 
@@ -277,16 +279,20 @@ esac
 echo
 echo "Next:"
 echo "  witdiff doctor                      # check the toolchain is usable"
-echo "  integrations/install.sh             # wire it into your coding agent"
+echo "  curl -fsSL $INTEGRATIONS_URL | sh   # wire it into your coding agent"
 echo
 # `$0` is the interpreter (often `sh`) when this is piped into a shell, so it
 # cannot be trusted to name the script. When there is no local copy — the
 # documented `curl | sh` path — the hint must give a command that works anyway:
 # telling the reader to run `install.sh --uninstall` when the file exists only
 # on GitHub is advice they cannot follow. The URL form always resolves.
+# The installed binary can remove itself, and it is the one thing the reader
+# definitely has. A relative or URL script reference is offered second, because
+# `install.sh --uninstall` requires a copy that `curl | sh` never saves: measured
+# from a real shell, that command answered `zsh: command not found: install.sh`.
+echo "To remove: witdiff uninstall"
 if [ -f "$0" ] && [ "$0" != "sh" ]; then
-  echo "To remove: $0 --uninstall"
+  echo "  (this copy: $0 --uninstall)"
 else
-  echo "To remove:"
-  echo "  curl -fsSL $INSTALL_URL | sh -s -- --uninstall"
+  echo "  (no local copy of this script: curl -fsSL $INSTALL_URL | sh -s -- --uninstall)"
 fi

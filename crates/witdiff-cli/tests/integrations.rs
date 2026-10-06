@@ -829,3 +829,172 @@ fn every_integration_tells_the_agent_how_to_read_exit_codes() {
         );
     }
 }
+
+/// `witdiff uninstall` must work without any copy of the installer.
+///
+/// The failure it exists for: the installer printed `install.sh --uninstall`,
+/// but the documented install path is `curl ... | sh`, which saves no copy.
+/// Measured from a real shell, a user ran exactly that and got
+/// `zsh: command not found: install.sh`. The binary is the one thing an install
+/// always leaves behind, so it has to be able to remove itself.
+#[test]
+fn the_binary_can_uninstall_itself_without_a_script() {
+    let binary = env!("CARGO_BIN_EXE_witdiff");
+    let sandbox = tempfile::TempDir::new().expect("temp dir");
+    let bin_dir = sandbox.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let installed = bin_dir.join(if cfg!(windows) {
+        "witdiff.exe"
+    } else {
+        "witdiff"
+    });
+    std::fs::copy(binary, &installed).expect("copy the binary");
+
+    // A HOME with one integration of ours and one of the user's own.
+    let home = sandbox.path().join("home");
+    std::fs::create_dir_all(home.join(".claude/skills/witdiff")).expect("ours");
+    std::fs::create_dir_all(home.join(".claude/skills/my-own-skill")).expect("theirs");
+    std::fs::write(home.join(".claude/skills/my-own-skill/notes.md"), "mine").expect("write");
+
+    let output = std::process::Command::new(&installed)
+        .arg("uninstall")
+        .env("HOME", &home)
+        .output()
+        .expect("run uninstall");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // On Windows a running executable cannot delete itself; the command is
+    // expected to report that rather than pretend. Everywhere else the file
+    // must be gone.
+    #[cfg(not(windows))]
+    assert!(
+        !installed.exists(),
+        "the binary must remove itself; output={text}"
+    );
+    #[cfg(windows)]
+    assert!(
+        !output.status.success(),
+        "on Windows the failure to self-delete must be reported, not hidden; output={text}"
+    );
+
+    assert!(
+        !home.join(".claude/skills/witdiff").exists(),
+        "our own integration must be removed; output={text}"
+    );
+    assert!(
+        home.join(".claude/skills/my-own-skill/notes.md").exists(),
+        "a skill WitDiff did not install must survive; output={text}"
+    );
+}
+
+/// A dry run must change nothing.
+///
+/// An uninstaller that cannot be previewed is one a cautious user will not run,
+/// which leaves them stuck with a tool they wanted to remove.
+#[test]
+fn uninstall_dry_run_removes_nothing() {
+    let binary = env!("CARGO_BIN_EXE_witdiff");
+    let sandbox = tempfile::TempDir::new().expect("temp dir");
+    let bin_dir = sandbox.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let installed = bin_dir.join(if cfg!(windows) {
+        "witdiff.exe"
+    } else {
+        "witdiff"
+    });
+    std::fs::copy(binary, &installed).expect("copy");
+
+    let home = sandbox.path().join("home");
+    std::fs::create_dir_all(home.join(".claude/skills/witdiff")).expect("ours");
+
+    let output = std::process::Command::new(&installed)
+        .args(["uninstall", "--dry-run"])
+        .env("HOME", &home)
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+
+    assert!(installed.exists(), "a dry run must not remove the binary");
+    assert!(
+        home.join(".claude/skills/witdiff").exists(),
+        "a dry run must not remove integrations"
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Nothing was changed"), "{text}");
+}
+
+/// `--keep-integrations` removes only the binary.
+#[test]
+fn uninstall_can_keep_the_integrations() {
+    let binary = env!("CARGO_BIN_EXE_witdiff");
+    let sandbox = tempfile::TempDir::new().expect("temp dir");
+    let bin_dir = sandbox.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let installed = bin_dir.join(if cfg!(windows) {
+        "witdiff.exe"
+    } else {
+        "witdiff"
+    });
+    std::fs::copy(binary, &installed).expect("copy");
+
+    let home = sandbox.path().join("home");
+    std::fs::create_dir_all(home.join(".claude/skills/witdiff")).expect("ours");
+
+    let _ = std::process::Command::new(&installed)
+        .args(["uninstall", "--keep-integrations"])
+        .env("HOME", &home)
+        .output()
+        .expect("run");
+
+    assert!(
+        home.join(".claude/skills/witdiff").exists(),
+        "--keep-integrations must leave them alone"
+    );
+}
+
+/// No printed instruction may name a file the reader is not guaranteed to have.
+///
+/// A property rather than a string check, because the last version of this
+/// mistake was the literal `install.sh --uninstall` and the next would be a
+/// different literal. `To remove:` must name the `witdiff` command; a script
+/// reference may appear only as a clearly-labelled fallback with a URL.
+#[test]
+fn the_installer_never_requires_a_local_script() {
+    let root = integrations().parent().expect("repository root").to_owned();
+    let text = std::fs::read_to_string(root.join("install.sh")).expect("read install.sh");
+
+    assert!(
+        text.contains("To remove: witdiff uninstall"),
+        "the removal hint must name the binary, which always exists"
+    );
+    // Every bare `install.sh --flag` mention must be inside a URL or inside a
+    // line that also offers the URL form.
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        // Lines that explicitly scope themselves to a checkout are offering
+        // the local form *in addition to* the URL, which is the point.
+        let scoped_local = trimmed.to_ascii_lowercase();
+        if scoped_local.contains("no local copy of this script")
+            || scoped_local.contains("from a checkout")
+        {
+            continue;
+        }
+        if trimmed.contains("install.sh --") && !trimmed.contains("http") {
+            // A usage line inside the script's own help is fine: the reader
+            // already has the file at that point.
+            let is_own_usage = trimmed.starts_with("Usage:") || trimmed.starts_with("--");
+            assert!(
+                is_own_usage || trimmed.contains("$0"),
+                "line {} names a bare installer path in output the user reads: {trimmed}",
+                index + 1
+            );
+        }
+    }
+}

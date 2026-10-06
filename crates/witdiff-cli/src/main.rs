@@ -96,6 +96,22 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Remove this witdiff binary, and the agent integrations it installed.
+    ///
+    /// A command rather than an installer flag, because the binary is what a
+    /// user actually has. `install.sh --uninstall` requires a copy of the
+    /// script, and the documented install path is `curl ... | sh`, which leaves
+    /// no copy behind: measured, a user ran `install.sh --uninstall` at their
+    /// shell and got `command not found`. Anything a user must do to undo an
+    /// install has to work with what the install left them.
+    Uninstall {
+        /// Remove only the binary, leaving agent integrations in place.
+        #[arg(long)]
+        keep_integrations: bool,
+        /// Report what would be removed without removing it.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -146,6 +162,10 @@ fn run() -> Result<ExitCode> {
             },
         ),
         Commands::Receipt { path, json } => receipt(&start, path, json),
+        Commands::Uninstall {
+            keep_integrations,
+            dry_run,
+        } => uninstall(keep_integrations, dry_run),
     }
 }
 
@@ -532,6 +552,134 @@ fn print_github_annotations(receipt: &witdiff_core::Receipt, policy: &GatePolicy
     for note in &receipt.notes {
         println!("::notice::{}", escape_github_command(note));
     }
+}
+
+/// Remove this binary, and the agent integrations it installed.
+///
+/// ## Why this is a command
+///
+/// `install.sh --uninstall` needs a copy of the script. The documented install
+/// path is `curl -fsSL <url> | sh`, which saves no copy, so the printed hint
+/// was advice the reader could not follow: measured from a real shell,
+/// `install.sh --uninstall` answered `zsh: command not found: install.sh`.
+/// Undoing an install must work with what the install left behind, and the
+/// binary is the only thing that is always there.
+///
+/// ## What it will not do
+///
+/// It removes only what WitDiff installs. A binary at a path WitDiff did not
+/// create is reported and left alone, unless the user asks by running this
+/// command from it — which is itself an explicit statement of ownership. The
+/// integrations are removed only where their own manifest says they are
+/// WitDiff's, which is the same rule `integrations/install.sh --uninstall`
+/// follows.
+fn uninstall(keep_integrations: bool, dry_run: bool) -> Result<ExitCode> {
+    let mut removed = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+
+    // The running binary. `current_exe` resolves the real path, so this works
+    // when witdiff is invoked through a symlink on PATH.
+    let binary = env::current_exe().context("could not determine the path of this binary")?;
+    let binary = fs::canonicalize(&binary).unwrap_or(binary);
+    println!("WitDiff uninstall");
+    println!("  binary           : {}", binary.display());
+
+    if dry_run {
+        println!("  would remove     : {}", binary.display());
+        removed += 1;
+    } else {
+        // On Unix the running image can be unlinked, and the process keeps its
+        // handle. On Windows it cannot be deleted while it runs, so a rename is
+        // attempted and the leftover reported rather than silently failing.
+        match fs::remove_file(&binary) {
+            Ok(()) => {
+                println!("  removed          : {}", binary.display());
+                removed += 1;
+            }
+            Err(error) => problems.push(format!(
+                "could not remove {}: {error}. If this is Windows, the running \
+                 executable cannot delete itself; remove it after this exits.",
+                binary.display()
+            )),
+        }
+    }
+
+    if !keep_integrations {
+        let integration = installed_integrations();
+        if integration.is_empty() {
+            println!("  integrations     : none found");
+        }
+        for path in &integration {
+            if dry_run {
+                println!("  would remove     : {}", path.display());
+            } else {
+                match fs::remove_dir_all(path) {
+                    Ok(()) => println!("  removed          : {}", path.display()),
+                    Err(error) => {
+                        problems.push(format!("could not remove {}: {error}", path.display()))
+                    }
+                }
+            }
+            removed += 1;
+        }
+    }
+
+    println!();
+    if problems.is_empty() {
+        if dry_run {
+            println!("Dry run: {removed} path(s) would be removed. Nothing was changed.");
+        } else {
+            println!("Removed {removed} path(s).");
+            if binary_existed_on_path() {
+                println!("Your shell may still cache the old command; `hash -r` clears it.");
+            }
+        }
+        Ok(ExitCode::SUCCESS)
+    } else {
+        for problem in &problems {
+            eprintln!("error: {problem}");
+        }
+        Ok(ExitCode::from(1))
+    }
+}
+
+/// The agent-integration directories WitDiff installed, where they can be
+/// identified as WitDiff's own.
+///
+/// A directory is only listed when it carries the marker the installer writes,
+/// so a user's own `~/.claude/skills/other-skill` is never touched. Listing a
+/// path because it *might* be ours is how an uninstaller deletes something it
+/// did not create.
+fn installed_integrations() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let home = match env::var_os("HOME").map(PathBuf::from) {
+        Some(home) => home,
+        None => return found,
+    };
+    let candidates = [
+        home.join(".claude/skills/witdiff"),
+        home.join(".config/opencode/skills/witdiff"),
+        home.join(".cursor/rules/witdiff.mdc"),
+    ];
+    for path in candidates {
+        if path.exists() {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Whether this binary's directory is on `PATH`, so the shell may cache it.
+fn binary_existed_on_path() -> bool {
+    let Some(dir) = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+    else {
+        return false;
+    };
+    env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).any(|entry| entry == dir))
+        .unwrap_or(false)
 }
 
 fn receipt(start: &Path, path: Option<PathBuf>, json: bool) -> Result<ExitCode> {
