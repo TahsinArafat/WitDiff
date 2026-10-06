@@ -102,6 +102,42 @@ max_mutants_per_function = 5
 # base_dependency_dirs = [".venv"]         # Python
 
 # ---------------------------------------------------------------------------
+# Integrity-rule policy
+# ---------------------------------------------------------------------------
+#
+# How an individual integrity rule is weighted for this repository. Distinct
+# from `[gate]`, which decides which *statuses* pass: this decides one rule's
+# contribution to the verdict.
+#
+# A policy changes the verdict, never the finding. A waived finding is still
+# observed, still reported at its original severity, and still recorded in
+# `integrity_findings`; the receipt additionally lists it in `waivers` with the
+# reason below. A reader can therefore always see that a rule was silenced and
+# why. See ADR-0026.
+#
+# `reason` is required on every override: an unexplained suppression cannot be
+# audited six months later.
+#
+# weight: "block"  findings from this rule withhold `verified` (the default for
+#                  a high-severity finding)
+#         "warn"   findings are reported and do not withhold it
+#         "ignore" as "warn", and the receipt records a waiver naming this reason
+#
+# [policy]
+# rules = [
+#   { rule = "assertion_free_test", weight = "warn", reason = "legacy suite; tracked in JIRA-1234" },
+#   { rule = "removed_match_arm", weight = "ignore", reason = "arm removal is reviewed by hand here" },
+# ]
+#
+# Paths whose findings are waived entirely. A prefix: `vendor` covers everything
+# beneath it. Recorded as a waiver with this reason.
+#
+# ignore_paths = [
+#   { path = "vendor", reason = "generated dependency code, not ours" },
+#   { path = "tests/generated", reason = "code-generated; regenerate with `make tests`" },
+# ]
+
+# ---------------------------------------------------------------------------
 # Sandboxed execution
 # ---------------------------------------------------------------------------
 #

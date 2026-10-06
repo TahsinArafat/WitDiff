@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`[policy]` in `witdiff.toml`: per-rule weights and path ignores.** A
+  repository can now record that it has accepted a particular weakening, or
+  that a directory's findings are not its own, instead of leaving the gate red.
+  A policy changes the **verdict**, never the **finding**: a waived finding is
+  still observed, still reported at its original severity, and the receipt lists
+  it in `waivers` with the reason. Every override requires a `reason`, enforced
+  by the type. See ADR-0026.
 - **Every receipt carries a machine-readable `reason`.** `status` said what
   happened; `reason` says why, as one stable token. `not_verified` alone covered
   four unrelated causes with four different remedies, so an agent had to

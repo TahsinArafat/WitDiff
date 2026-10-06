@@ -635,6 +635,17 @@ pub struct Receipt {
     /// as [`Reason::Unrecorded`], which claims nothing about why.
     #[serde(default)]
     pub reason: Reason,
+    /// Findings that were observed but whose effect on the verdict the
+    /// committed policy waived.
+    ///
+    /// The finding is still in `integrity_findings`; this records that a rule
+    /// was silenced, by which policy, and why. Without it a reader could not
+    /// tell a clean run from one whose rules were waived.
+    ///
+    /// Additive in v1: empty for a receipt written before this existed, which
+    /// is correct because no policy was applied then.
+    #[serde(default)]
+    pub waivers: Vec<crate::policy::Waiver>,
     /// Which test command variant actually produced `head_run` and `base_run`.
     ///
     /// Additive in v1: a receipt written before this field existed deserializes

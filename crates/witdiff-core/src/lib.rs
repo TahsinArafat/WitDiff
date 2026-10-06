@@ -18,6 +18,7 @@ pub mod mutation;
 pub mod mutation_runner;
 pub mod phpanalysis;
 pub mod phpscript;
+pub mod policy;
 pub mod provenance;
 pub mod pyanalysis;
 pub mod pyscript;

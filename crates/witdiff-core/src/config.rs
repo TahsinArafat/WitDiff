@@ -17,6 +17,12 @@ pub struct Config {
     /// answers a different question: `verification` describes how to gather
     /// evidence, this describes what evidence will be accepted.
     pub gate: crate::model::GatePolicy,
+    /// How individual integrity rules are weighted for this repository.
+    ///
+    /// Separate from `gate`, which decides which *statuses* pass. This decides
+    /// how a *finding* is weighted. The distinction is deliberate: `gate` is
+    /// about the verdict, this is about one rule's contribution to it.
+    pub policy: crate::policy::PolicyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

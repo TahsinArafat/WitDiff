@@ -35,3 +35,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
   verification — the offline guarantee stays intact
 - ADR-0025: every receipt carries a machine-readable `reason`, so an agent
   branches on a token instead of parsing prose
+- ADR-0026: integrity-rule policy waives a finding's effect on the gate, never
+  the observation itself

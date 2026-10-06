@@ -576,6 +576,172 @@ fn even_numbers_are_reported_even_for_large_values() {
         receipt.status != VerificationStatus::Verified,
         "an ignored regression test must never be certified"
     );
+
+    // The waiver itself is exercised in `a_waived_rule_lifts_the_block_without
+    // _hiding_the_finding`, which builds its own fixture. Running a second
+    // `verify` against *this* fixture would not be comparable: the fixture
+    // shares one `[build] target-dir` between the workspace and the base
+    // worktree, so a repeat run can observe a stale build and fail at
+    // `head_failed` before reaching any integrity logic. That is a measured
+    // property of the fixture, documented at the top of this file, not of the
+    // policy.
+}
+
+/// A committed policy can waive a rule's effect on the verdict, and the finding
+/// is still observed.
+///
+/// The property that matters: a waiver changes how a finding is **weighted**,
+/// never whether it was **observed**. A mechanism that removed the finding
+/// would let a repository hide a weakening from its own reviewers, which is the
+/// failure this tool exists to catch. See ADR-0026.
+#[test]
+#[ignore]
+fn a_waived_rule_lifts_the_block_without_hiding_the_finding() {
+    let base_regression = "\
+#[test]
+fn even_numbers_are_reported_even() {
+    assert!(!witdiff_fixture::is_even(2));
+}
+";
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", buggy_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+        ("tests/regression.rs", base_regression),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write(
+        "tests/regression.rs",
+        "\
+#[test]
+fn even_numbers_are_reported_even() {
+    assert!(witdiff_fixture::is_even(2));
+    assert!(!witdiff_fixture::is_even(3));
+}
+
+#[test]
+#[ignore]
+fn even_numbers_are_reported_even_for_large_values() {
+    assert!(witdiff_fixture::is_even(1_000_002));
+}
+",
+    );
+
+    let mut config = fixture_config();
+    // The fixture produces TWO high-severity findings — `ignored_test` for the
+    // added `#[ignore]`, and `removed_assertion` for the assertion rewritten in
+    // place. Both must be waived to lift the block, and waiving only one leaves
+    // the other blocking. That was found by this test failing with the second
+    // still present, which is the tool being right and the fixture being
+    // incomplete: a policy that silences one rule has not silenced another.
+    config.policy.rules = vec![
+        witdiff_core::policy::RuleOverride {
+            rule: "ignored_test".to_owned(),
+            weight: witdiff_core::policy::Weight::Ignore,
+            reason: "this fixture waives it to prove the waiver is recorded".to_owned(),
+        },
+        witdiff_core::policy::RuleOverride {
+            rule: "removed_assertion".to_owned(),
+            weight: witdiff_core::policy::Weight::Ignore,
+            reason: "and this one too, so the verdict can move".to_owned(),
+        },
+    ];
+    let receipt = fixture.verify(&config);
+
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::VerifiedWithWarnings,
+        "the waiver lifts the block, leaving warnings; reason={:?} notes={:?}",
+        receipt.reason,
+        receipt.notes
+    );
+
+    // The observation survives. This is the whole point of the design.
+    assert!(
+        receipt
+            .integrity_findings
+            .iter()
+            .any(|f| f.rule == "ignored_test" && f.severity == witdiff_core::Severity::High),
+        "the finding must still be present, still at high severity: {:?}",
+        receipt.integrity_findings
+    );
+    assert!(
+        receipt.red_green_proven,
+        "the proof is unaffected by the waiver"
+    );
+
+    // And the receipt says a rule was silenced, and why.
+    let waiver = receipt
+        .waivers
+        .iter()
+        .find(|w| w.rule == "ignored_test")
+        .expect(
+            "the waiver must be recorded, or a reader cannot tell a clean run from a silenced one",
+        );
+    assert_eq!(waiver.source, witdiff_core::policy::WaiverSource::Rule);
+    assert!(
+        waiver.reason.contains("prove the waiver is recorded"),
+        "the waiver must carry the policy's reason: {waiver:?}"
+    );
+}
+
+/// A policy naming one rule must not waive another.
+///
+/// A leak here would silently disable every integrity rule in the repository,
+/// which is the opposite of a narrowing policy.
+#[test]
+#[ignore]
+fn a_policy_for_one_rule_does_not_waive_another() {
+    let base_regression = "\
+#[test]
+fn even_numbers_are_reported_even() {
+    assert!(!witdiff_fixture::is_even(2));
+}
+";
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", buggy_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+        ("tests/regression.rs", base_regression),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write(
+        "tests/regression.rs",
+        "\
+#[test]
+fn even_numbers_are_reported_even() {
+    assert!(witdiff_fixture::is_even(2));
+    assert!(!witdiff_fixture::is_even(3));
+}
+
+#[test]
+#[ignore]
+fn even_numbers_are_reported_even_for_large_values() {
+    assert!(witdiff_fixture::is_even(1_000_002));
+}
+",
+    );
+
+    let mut config = fixture_config();
+    config.policy.rules = vec![witdiff_core::policy::RuleOverride {
+        rule: "assertion_free_test".to_owned(),
+        weight: witdiff_core::policy::Weight::Ignore,
+        reason: "an unrelated rule".to_owned(),
+    }];
+    let receipt = fixture.verify(&config);
+
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::NotVerified,
+        "waiving an unrelated rule must not waive `ignored_test`"
+    );
+    assert!(
+        receipt.waivers.is_empty(),
+        "no waiver applied to this finding: {:?}",
+        receipt.waivers
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -759,6 +759,24 @@ fn print_receipt_summary(receipt: &Receipt) {
                 finding.message
             );
         }
+
+        // A waived finding is printed with the rest, and the waiver is shown
+        // beside it. Removing it from the list would let a repository hide a
+        // weakening from its own reviewers; showing the finding without saying
+        // it was waived would leave a reader unable to tell why the verdict is
+        // `verified_with_warnings` rather than `not_verified`. See ADR-0026.
+        if !receipt.waivers.is_empty() {
+            println!(
+                "  waivers          : {} finding(s) waived by policy",
+                receipt.waivers.len()
+            );
+            for waiver in &receipt.waivers {
+                println!(
+                    "    waived {} [{}] ({:?}) — {}",
+                    waiver.path, waiver.rule, waiver.source, waiver.reason
+                );
+            }
+        }
     }
     for entry in &receipt.spliced_inline_tests {
         println!(

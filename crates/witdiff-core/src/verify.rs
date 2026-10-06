@@ -181,6 +181,10 @@ pub fn verify_repository(
     // The machine-readable "why", parallel to `notes`. Set at each branch that
     // decides a status, so a caller never has to parse the prose.
     let mut reason = crate::model::Reason::Unrecorded;
+    // Findings that were observed but whose effect on the verdict was waived by
+    // the committed policy. Recorded in the receipt, never removed from
+    // `integrity_findings`.
+    let mut waivers: Vec<crate::policy::Waiver> = Vec::new();
     let mut status = if missing_program.is_some() {
         // No experiment: a proof requires the command to run.
         reason = crate::model::Reason::TestCommandUnavailable;
@@ -373,9 +377,25 @@ pub fn verify_repository(
                         // could have been a flake.
                         let flaky = !unstable.is_empty();
                         red_green_proven = !flaky;
-                        let has_high = integrity_findings
+                        // A finding blocks unless the committed policy says
+                        // otherwise. The finding itself is untouched: it stays
+                        // in `integrity_findings` and is still printed. Only
+                        // its effect on the verdict changes, and every waived
+                        // finding is recorded in `waivers` so a reader can see
+                        // that a rule was silenced and why. See ADR-0026.
+                        let blocking: Vec<_> = integrity_findings
                             .iter()
-                            .any(|f| f.severity == Severity::High);
+                            .filter(|f| config.policy.blocks(&f.rule, &f.path, f.severity.clone()))
+                            .collect();
+                        // Named for what it means now: a finding blocks
+                        // unless the policy says otherwise.
+                        let blocked = !blocking.is_empty();
+                        waivers = config.policy.waivers(
+                            &integrity_findings
+                                .iter()
+                                .map(|f| (f.rule.clone(), f.path.clone(), f.severity.clone()))
+                                .collect::<Vec<_>>(),
+                        );
                         if flaky {
                             reason = crate::model::Reason::ExperimentUnstable;
                             notes.push(
@@ -385,7 +405,7 @@ pub fn verify_repository(
                                     .into(),
                             );
                             VerificationStatus::NotVerified
-                        } else if config.verification.block_on_integrity_findings && has_high {
+                        } else if config.verification.block_on_integrity_findings && blocked {
                             reason = crate::model::Reason::BlockedByIntegrityFinding;
                             notes.push("red/green behavior was observed, but high-severity test-integrity findings block verification".into());
                             VerificationStatus::NotVerified
@@ -700,6 +720,7 @@ pub fn verify_repository(
         red_green_proven,
         reason,
         notes,
+        waivers,
         test_selection,
         effective_test_command,
         spliced_inline_tests,
