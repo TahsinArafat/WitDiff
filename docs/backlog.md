@@ -136,7 +136,17 @@ The shared engine does the same for Python, Go and Java.
 
 ### PG-202: policy configuration
 
-Allow organizations to mark integrity rules as block/warn/ignore without changing deterministic observations.
+Status: done (ADR-0026). A committed `[policy]` section marks a rule
+`block`/`warn`/`ignore` and waives findings for a path prefix. The constraint in
+the original entry — "without changing deterministic observations" — is enforced
+rather than documented: a waived finding is still computed, still reported at
+its original severity, and still present in `integrity_findings`. Only its
+effect on the verdict changes, and the receipt lists it in `waivers` naming the
+rule, the path, the reason and whether the waiver came from a rule or a path.
+Every override requires a `reason`, by the type rather than by convention, and
+a policy may only make a rule *less* blocking — there is no weight that
+escalates a `Warning`, because that would assign a severity the analysis never
+produced.
 
 ## P3 — changed-code mutation
 

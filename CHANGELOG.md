@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Nothing yet.
+
+## 1.0.0-alpha.4
+
+Three things an agent can act on without reading English: a machine-readable
+`reason` on every receipt, a `[policy]` section for waiving a rule's effect on
+the gate, and an update notice that names a command you can actually run.
+
 ### Added
 
 - **`[policy]` in `witdiff.toml`: per-rule weights and path ignores.** A

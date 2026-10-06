@@ -92,12 +92,15 @@ feature scope rather than defect:
 2. **Mutation outside Rust.** The operators are defined over Rust syntax
    (ADR-0011). Other languages get red/green proof and structural analysis, but
    no mutation signal.
-3. **Integrity-rule policy (PG-202).** Organizations marking an individual rule
-   block/warn/ignore. Distinct from `[gate]`, which decides which *statuses*
-   pass; this would decide how a *finding* is weighted. It must change only how
-   an observation is reported, never the observation itself.
-4. **Mock substitution around changed behaviour**, the last item open from the
+3. **Mock substitution around changed behaviour**, the last item open from the
    original integrity list.
+
+Integrity-rule policy (PG-202) shipped in ADR-0026: a committed `[policy]`
+section marks an individual rule `block`/`warn`/`ignore`, and a waived finding
+is still observed, still reported at its severity and still recorded in the
+receipt's `waivers` list with the reason. It is listed here rather than in the
+open set because a description of pending work that has already landed is how
+the next reader loses an afternoon.
 
 ## What has already been established
 
