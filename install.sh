@@ -139,14 +139,29 @@ if [ "$UNINSTALL" -eq 1 ]; then
     echo "(checked \$HOME/.local/bin and /usr/local/bin)"
     exit 0
   fi
+  # An explicit `--to` names the location, so it is known by definition. The
+  # guard below used to reject it: `installed_path` returns `$DEST/witdiff`
+  # when `--to` is given, and the `case` then refused that same path as
+  # "outside the known install locations" — so an install made with the two
+  # documented flags could not be undone with them, and the error told the user
+  # to remove by hand a file this script had just created.
+  #
+  # The property worth keeping is that every removal targets a path the
+  # installer created: either the user named it, or it is one of the two
+  # conventional directories. The `case` still enforces that.
   case "$path" in
     "$HOME"/*|/usr/local/bin/*)
       rm -f "$path"
       echo "removed $path"
       ;;
     *)
-      echo "error: $path is outside the known install locations; remove it yourself" >&2
-      exit 1
+      if [ -n "$DEST" ] && [ "$path" = "$DEST/witdiff" ]; then
+        rm -f "$path"
+        echo "removed $path"
+      else
+        echo "error: $path is outside the known install locations; remove it yourself" >&2
+        exit 1
+      fi
       ;;
   esac
   echo

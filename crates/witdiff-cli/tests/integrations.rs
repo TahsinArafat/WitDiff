@@ -284,6 +284,56 @@ fn both_installers_support_uninstall() {
     }
 }
 
+/// `--to` and `--uninstall` must agree with each other.
+///
+/// They did not: `installed_path` returns `$DEST/witdiff` when `--to` is
+/// given, and the `case` guarding removal rejected that same path as "outside
+/// the known install locations". An install made with the two flags the README
+/// documents could therefore not be undone with them, and the error told the
+/// user to delete by hand a file this script had just created.
+///
+/// This **executes** the uninstall branch against a stub install rather than
+/// grepping for strings. A first version of this test read the source for
+/// `$DEST/witdiff` and passed with the fix reverted — the token appears in
+/// `installed_path` whether or not the removal branch honours it, which is the
+/// same "mentions it" versus "handles it" trap this repository has hit before.
+#[test]
+fn a_to_install_can_be_uninstalled() {
+    let root = integrations().parent().expect("repository root").to_owned();
+    let script = root.join("install.sh");
+    let sandbox = tempfile::TempDir::new().expect("temp dir");
+    let dest = sandbox.path().join("dest");
+    std::fs::create_dir_all(&dest).expect("dest");
+
+    // Stand in for an installed binary: the uninstall path only needs a file
+    // at the resolved location.
+    let binary = dest.join("witdiff");
+    std::fs::write(&binary, "#!/bin/sh\necho stub\n").expect("stub");
+    assert!(binary.exists());
+
+    let output = std::process::Command::new("sh")
+        .arg(&script)
+        .arg("--to")
+        .arg(&dest)
+        .arg("--uninstall")
+        .output()
+        .expect("run install.sh --uninstall");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        output.status.success(),
+        "uninstalling a `--to` install must succeed; got {text}"
+    );
+    assert!(
+        !binary.exists(),
+        "the file the installer created must be gone; output was {text}"
+    );
+}
+
 /// Every installer must handle every platform the release publishes.
 ///
 /// This executes the installer's own archive-selection logic rather than
