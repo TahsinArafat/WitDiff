@@ -31,3 +31,5 @@ This file is a lightweight index. Add formal ADRs under `docs/adr/` when decisio
   digest, with an operator-supplied key that WitDiff never stores
 - ADR-0023: PHP integrity analysis uses `token_get_all` from the standard
   library, covering both PHPUnit methods and Pest closures
+- ADR-0024: updates are notified, never installed, and never checked during
+  verification — the offline guarantee stays intact

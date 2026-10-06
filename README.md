@@ -45,8 +45,21 @@ destination is reported, not escalated.
 ```bash
 ./install.sh --version v1.0.0-alpha.3   # pin a release
 ./install.sh --to /usr/local/bin        # choose the directory
+./install.sh --force                    # upgrade an existing install
 ./install.sh --uninstall                # remove it
 ```
+
+**Updating.** `witdiff doctor` prints the installed version and tells you when a
+newer release exists on your channel. It does not install anything, and it never
+runs during `verify` — verification stays offline and a receipt always describes
+the tool that produced it. To take an update:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --force
+```
+
+Silence it with `WITDIFF_NO_UPDATE_CHECK=1`, or by setting `check = false` under
+`[updates]` in `witdiff.toml`. See [ADR-0024](docs/adr/0024-update-notification.md).
 
 **Windows (PowerShell)** — the installer is a POSIX shell script. Download the
 zip and verify it directly:

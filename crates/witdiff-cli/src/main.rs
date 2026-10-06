@@ -1,4 +1,5 @@
 mod toolchain;
+mod update;
 
 use std::{
     env, fs,
@@ -213,6 +214,17 @@ fn doctor(start: &Path) -> Result<ExitCode> {
     match &framework {
         Ok(framework) => println!("  framework  : ok ({})", framework.as_str()),
         Err(error) => println!("  framework  : failed ({error})"),
+    }
+
+    // Deliberately here and not in `verify`: a verification that consulted the
+    // network would break the offline guarantee, and one that could replace its
+    // own binary would make the receipt it just wrote describe a tool that no
+    // longer exists. `doctor` is already an informational command, so a notice
+    // costs nothing and is never in the path of producing evidence.
+    println!("  version    : {}", env!("CARGO_PKG_VERSION"));
+    if let Some(note) = update::message(&update::check(repo.root(), env!("CARGO_PKG_VERSION"))) {
+        println!();
+        println!("  {note}");
     }
 
     let ok = git_ok && command_ok && framework.is_ok();

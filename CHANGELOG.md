@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`witdiff doctor` reports the installed version and, when a newer release
+  exists on the same channel, says so.** It never installs anything and never
+  runs during `verify` — see ADR-0024. Silent when offline, cached for a day
+  outside the repository, and disabled by `WITDIFF_NO_UPDATE_CHECK=1` or
+  `check = false` under `[updates]` in `witdiff.toml`.
+
+### Fixed
+
+- **`install.sh --uninstall` refused a directory that `--to` had installed
+  into.** `installed_path` returned `$DEST/witdiff` and the removal guard then
+  rejected that same path as "outside the known install locations", so an
+  install made with the two flags the README documents could not be undone with
+  them. Found by running the documented commands against the published
+  `v1.0.0-alpha.3` release rather than reading the script.
+- **The Windows build did not compile.** `basedeps.rs` called
+  `std::os::unix::fs::symlink` unconditionally, which broke
+  `x86_64-pc-windows-msvc`. Three further unguarded `std::os::unix` uses were
+  latent in test code. All now behind `#[cfg(unix)]` or a platform-aware helper.
+
 ## 1.0.0-alpha.3
 
 PHP support, and two false-proof fixes. The headline is that PHP projects can now
