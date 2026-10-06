@@ -203,6 +203,12 @@ impl VerificationConfig {
     /// than merely correct — a tester reported the previous wording as "fighting
     /// with the unknown-framework error", because it listed valid values without
     /// saying what the choice was *for* or where to look.
+    ///
+    /// The frameworks are listed from [`TestFramework::all`] rather than written
+    /// out. A hand-written list in this message went stale the moment PHP
+    /// shipped: it still told the reader that only six languages had structural
+    /// analysis, which is the same class of defect as a stale README. A list
+    /// derived from the enum cannot disagree with the enum.
     pub fn framework(&self) -> anyhow::Result<TestFramework> {
         TestFramework::parse(&self.framework).ok_or_else(|| {
             anyhow::anyhow!(
@@ -215,8 +221,8 @@ impl VerificationConfig {
                  guessing there is exactly what would produce a false proof. Set \
                  `verification.flake_repeats` and the analysis settings aside; they depend on \
                  this classifier.\n\n\
-                 Structural test-integrity analysis needs a parser for the language. Supported \
-                 today: Rust, Python, Go, Java, Ruby, JavaScript/TypeScript. See \
+                 Structural test-integrity analysis needs a parser for the language, and every \
+                 framework listed above has one, so its language is covered. See \
                  docs/support-matrix.md for what is proven per language, and what adding a \
                  framework would cost.",
                 self.framework,
@@ -810,5 +816,41 @@ mod inference_tests {
             return;
         };
         toml::from_str::<Config>(&text).expect("witdiff.toml must remain valid TOML");
+    }
+
+    /// The unknown-framework message is the first thing a new user with an
+    /// unsupported language sees, and a hardcoded language list in it went stale
+    /// the moment PHP shipped. Assert it names every framework the build
+    /// actually implements, so it cannot drift again.
+    #[test]
+    fn the_unknown_framework_error_lists_every_implemented_framework() {
+        let config = VerificationConfig {
+            framework: "cobol".to_owned(),
+            ..VerificationConfig::default()
+        };
+        let message = config
+            .framework()
+            .expect_err("cobol is not supported")
+            .to_string();
+
+        for framework in TestFramework::all() {
+            assert!(
+                message.contains(framework.as_str()),
+                "the error must name `{}` so a user can see what is available:\n{message}",
+                framework.as_str()
+            );
+        }
+        // The actionable part: what the setting is *for*, and where to look.
+        assert!(message.contains("docs/support-matrix.md"), "{message}");
+        assert!(message.contains("false proof"), "{message}");
+    }
+
+    #[test]
+    fn a_supported_framework_resolves() {
+        let config = VerificationConfig {
+            framework: "phpunit".to_owned(),
+            ..VerificationConfig::default()
+        };
+        assert_eq!(config.framework().unwrap(), TestFramework::Php);
     }
 }
