@@ -256,6 +256,7 @@ annotates pull requests, and an [MCP server](crates/witdiff-mcp) exposing
 
 | | |
 | --- | --- |
+| [Case study](docs/case-study.md) | What WitDiff contributes, measured against an agent without it |
 | [Support matrix](docs/support-matrix.md) | What is verified per language, and what is not |
 | [Verification model](docs/verification-model.md) | What each status means, and why |
 | [Receipt format](docs/receipt.md) | Every field a consumer can rely on |
