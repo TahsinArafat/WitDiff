@@ -309,13 +309,6 @@ fn the_opencode_plugin_exports_the_v2_default_shape() {
     );
 }
 
-/// The installer must know how to remove what it installed.
-///
-/// Without this, a user who tries the tool has no documented way back to a
-/// clean state. Asserted rather than assumed because both installers gained
-/// their uninstall path after the fact, and a regression would be invisible
-/// until someone needed it.
-#[test]
 /// A user must be able to undo an install even when the binary cannot do it.
 ///
 /// The chain is closed on paper: `witdiff uninstall` needs the binary, and
@@ -370,6 +363,13 @@ fn a_standalone_uninstaller_exists_for_each_platform() {
     );
 }
 
+/// The installer must know how to remove what it installed.
+///
+/// Without this, a user who tries the tool has no documented way back to a
+/// clean state. Asserted rather than assumed because both installers gained
+/// their uninstall path after the fact, and a regression would be invisible
+/// until someone needed it.
+#[test]
 fn both_installers_support_uninstall() {
     let dir = integrations();
     let root = dir.parent().expect("repository root");
