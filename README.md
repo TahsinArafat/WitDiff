@@ -44,7 +44,7 @@ destination is reported, not escalated.
 
 ```bash
 # Every option through the same one-liner — no repository needed.
-curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --version v1.0.0-alpha.4
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --version v1.0.0-alpha.5
 curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --to /usr/local/bin
 curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/install.sh | sh -s -- --force
 ```
@@ -81,7 +81,7 @@ Silence it with `WITDIFF_NO_UPDATE_CHECK=1`, or by setting `check = false` under
 zip and verify it directly:
 
 ```powershell
-$V = "1.0.0-alpha.4"
+$V = "1.0.0-alpha.5"
 $u = "https://github.com/TahsinArafat/WitDiff/releases/download/v$V"
 Invoke-WebRequest "$u/witdiff-x86_64-pc-windows-msvc.zip" -OutFile witdiff.zip
 Invoke-WebRequest "$u/SHA256SUMS" -OutFile SHA256SUMS

@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.5
+WitDiff answers a failed verification instead of guessing at one, and reads
+the test runners a Node repository actually uses. The OpenCode plugin loads
+on v2.
 
 ### Fixed
 - **The OpenCode plugin could not load on OpenCode v2.** v2 replaced the
