@@ -7,7 +7,7 @@ harness's own documented extension format.
 | Directory | Harness | Format | Install to |
 | --- | --- | --- | --- |
 | [`claude/`](claude) | Claude Code | skill (Agent Skills spec) | `.claude/skills/` |
-| [`opencode/`](opencode) | OpenCode | plugin + skill | `.opencode/plugins/`, `.opencode/skills/` |
+| [`opencode/`](opencode) | OpenCode (v2) | plugin + skill | `.opencode/plugins/`, `.opencode/skills/` |
 | [`pi/`](pi) | Pi | package (`pi` manifest) | `pi install ./pi` |
 | [`cursor/`](cursor) | Cursor | project rule (`.mdc`) | `.cursor/rules/` |
 | [`generic/`](generic) | any | AGENTS.md snippet | `AGENTS.md`, `CLAUDE.md` |

@@ -3,6 +3,19 @@
 ## Unreleased
 
 ### Fixed
+- **The OpenCode plugin could not load on OpenCode v2.** v2 replaced the
+  plugin contract: a plugin must default-export `{ id, setup }` and is rejected
+  at load with "Plugin must export a default definition with an id and an effect
+  or setup function". The integration exported only the v1 shape — a named
+  export returning `{ tool: { ... } }` — so on v2 the tool silently did not
+  exist. Rewritten against the published v2 types: the tool is registered
+  through `context.tool.transform(editor => editor.add(...))` because
+  `ToolDomain` exposes only `transform`/`reload`/`hook`, `execute` returns a
+  `Result` object rather than a bare string, and the removed `$` shell helper is
+  replaced by `spawn` with an argument vector and `shell: false`. The v1 named
+  export is kept so older hosts still load it, and the file typechecks against
+  `@opencode-ai/plugin` under `--strict`. Measured on opencode v2.0.30.
+
 - **WitDiff classified its own config as production code.** Running
   `witdiff init` to learn the schema meant the next `witdiff inspect` reported
   `P witdiff.toml` — the tool counting its own configuration as part of the

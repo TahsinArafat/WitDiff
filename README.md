@@ -243,7 +243,7 @@ WitDiff is a CLI plus JSON, so any harness can use it. Ready-made integrations:
 | Harness | What you get | Install |
 | --- | --- | --- |
 | [Claude Code](integrations/claude) | `witdiff` skill | copy to `.claude/skills/` |
-| [OpenCode](integrations/opencode) | plugin + `witdiff_verify` tool | copy to `.opencode/plugins/` |
+| [OpenCode](integrations/opencode) | plugin + `witdiff_verify` tool (v2) | copy to `.opencode/plugins/` |
 | [Pi](integrations/pi) | package with skill | `pi install ./integrations/pi` |
 | [Cursor](integrations/cursor) | always-on rule | copy to `.cursor/rules/` |
 | Anything else | project instructions | [AGENTS.md snippet](integrations/generic/AGENTS.md) |

@@ -259,6 +259,56 @@ fn the_manifests_point_at_files_that_exist() {
         "the plugin file must exist"
     );
 }
+/// The OpenCode plugin must satisfy the v2 plugin contract, which is a
+/// **default export** of `{ id, setup }`.
+///
+/// Measured on opencode v2.0.30: a v1 plugin — a named export of an async
+/// function returning `{ tool: { ... } }` — is rejected at load with
+/// "Plugin must export a default definition with an id and an effect or setup
+/// function", so the tool silently does not exist. The v1 shape is kept as a
+/// named export for older hosts, so the token check alone cannot tell a file
+/// that is v2-only from one that is v1-only; the default export can.
+#[test]
+fn the_opencode_plugin_exports_the_v2_default_shape() {
+    let path = integrations()
+        .join("opencode")
+        .join("plugins")
+        .join("witdiff.ts");
+    let text = std::fs::read_to_string(&path).expect("read the plugin");
+
+    assert!(
+        text.contains("export default"),
+        "v2 requires a default export; without it the host refuses to load the \
+         plugin and the tool does not exist"
+    );
+    assert!(
+        text.contains("setup"),
+        "v2 requires an effect or setup function; the id alone is not loadable"
+    );
+    // v2's ToolDomain exposes only `transform`, `reload` and `hook`. A plugin
+    // that calls `context.tool.add` is calling a method that does not exist.
+    assert!(
+        text.contains("tool.transform"),
+        "v2 registers a tool through `context.tool.transform(editor => editor.add(...))`, \
+         not `context.tool.add(...)`"
+    );
+    // The v1 shell helper is gone in v2: `shell` exposes only a `create.before`
+    // hook, so a plugin still calling it cannot run the CLI.
+    assert!(
+        !text.contains("context.$") && !text.contains("({ $ }) => {\n  const result"),
+        "v2 removed the `$` shell helper; the CLI must be spawned with an argument vector"
+    );
+    assert!(
+        text.contains("node:child_process"),
+        "the v2 path must spawn the CLI directly"
+    );
+    // Both shapes are shipped, so neither host is left without the tool.
+    assert!(
+        text.contains("WitDiffPlugin"),
+        "the v1 named export must be kept for v1 hosts; only the default export is v2"
+    );
+}
+
 /// The installer must know how to remove what it installed.
 ///
 /// Without this, a user who tries the tool has no documented way back to a

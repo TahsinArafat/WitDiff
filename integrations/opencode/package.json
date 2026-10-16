@@ -13,7 +13,10 @@
     "plugins",
     "skills"
   ],
+  "engines": {
+    "opencode": ">=2.0.0"
+  },
   "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+    "@opencode-ai/plugin": ">=0.0.0-beta-19271"
   }
 }
