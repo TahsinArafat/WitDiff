@@ -316,6 +316,60 @@ fn the_opencode_plugin_exports_the_v2_default_shape() {
 /// their uninstall path after the fact, and a regression would be invisible
 /// until someone needed it.
 #[test]
+/// A user must be able to undo an install even when the binary cannot do it.
+///
+/// The chain is closed on paper: `witdiff uninstall` needs the binary, and
+/// `install.sh --uninstall` needs a copy of the installer, but the documented
+/// install path is `curl ... | sh`, which leaves neither. A user whose binary is
+/// broken — or on an alpha that shipped before the subcommand existed — had no
+/// documented way back to a clean state. These two scripts are that way, and
+/// they need nothing but a shell.
+#[test]
+fn a_standalone_uninstaller_exists_for_each_platform() {
+    let root = integrations().parent().expect("repository root").to_owned();
+
+    let sh = root.join("uninstall.sh");
+    let ps1 = root.join("uninstall.ps1");
+    assert!(sh.is_file(), "{} must exist", sh.display());
+    assert!(ps1.is_file(), "{} must exist", ps1.display());
+
+    let sh_text = std::fs::read_to_string(&sh).expect("read uninstall.sh");
+    assert!(
+        sh_text.contains("--execute") && sh_text.contains("--keep-integrations"),
+        "uninstall.sh must support the same two choices as `witdiff uninstall`"
+    );
+    // Dry run by default: a destructive script that acts the moment it is run is
+    // one that cannot be inspected first.
+    assert!(
+        sh_text.contains("EXECUTE=0"),
+        "uninstall.sh must default to removing nothing"
+    );
+    assert!(
+        sh_text.contains("Dry run"),
+        "uninstall.sh must say it was a dry run, or silence reads as success"
+    );
+    // The path guard is the safety property. install.sh enforces the same list
+    // and a path outside it is reported rather than deleted.
+    assert!(
+        sh_text.contains("/usr/local/bin/witdiff") && sh_text.contains(".local/bin/witdiff"),
+        "uninstall.sh must only touch the locations the installer writes"
+    );
+
+    let ps1_text = std::fs::read_to_string(&ps1).expect("read uninstall.ps1");
+    assert!(
+        ps1_text.contains("-Execute") && ps1_text.contains("-KeepIntegrations"),
+        "uninstall.ps1 must support the same two choices as `witdiff uninstall`"
+    );
+    assert!(
+        ps1_text.contains("REFUSED"),
+        "uninstall.ps1 must report a path it will not delete rather than delete it"
+    );
+    assert!(
+        ps1_text.contains("ReparsePoint"),
+        "uninstall.ps1 must refuse a link rather than follow it out of the tree"
+    );
+}
+
 fn both_installers_support_uninstall() {
     let dir = integrations();
     let root = dir.parent().expect("repository root");

@@ -161,6 +161,22 @@ curl -fsSL $U | sh -s -- --uninstall
 Both remove only what they installed, and both report what they removed. Files
 you wrote yourself are left alone, even in the same directories.
 
+**If neither works** — the binary is broken, or you are on a version that
+predates `witdiff uninstall` — two standalone scripts need nothing but a shell:
+```bash
+curl -fsSL https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/uninstall.sh | sh
+```
+That is a dry run: it prints what it would remove and deletes nothing. Add
+`--execute` to actually remove it, or `--keep-integrations` to leave the agent
+packages alone. On Windows:
+```powershell
+irm https://raw.githubusercontent.com/TahsinArafat/WitDiff/main/uninstall.ps1 | iex
+# or download it, then: .\uninstall.ps1 -Execute
+```
+Both restrict themselves to the directories the installer writes and report
+anything outside that rather than deleting it, and both leave shared
+directories in place unless they end up empty.
+
 ## Use
 
 ```bash

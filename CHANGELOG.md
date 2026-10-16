@@ -6,6 +6,14 @@ the test runners a Node repository actually uses. The OpenCode plugin loads
 on v2.
 
 ### Fixed
+- **A user whose binary could not run `uninstall` had no documented way back.**
+  `witdiff uninstall` needs the binary, and `install.sh --uninstall` needs a
+  copy of the installer, but the documented install path is `curl ... | sh`,
+  which leaves neither. Two standalone scripts — `uninstall.sh` and
+  `uninstall.ps1` — need nothing but a shell. Both are a dry run by default,
+  both restrict themselves to the directories the installer writes and report
+  anything outside that rather than deleting it, and both leave shared
+  directories in place unless they end up empty.
 - **The OpenCode plugin could not load on OpenCode v2.** v2 replaced the
   plugin contract: a plugin must default-export `{ id, setup }` and is rejected
   at load with "Plugin must export a default definition with an id and an effect
