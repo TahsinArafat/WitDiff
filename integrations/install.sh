@@ -11,6 +11,30 @@
 
 set -eu
 
+# Usage before anything else. The download of package tarballs below runs for
+# every invocation when this script is piped (including `--help`), and `--help`
+# through `curl | sh` was broken twice over: it fetched packages it does not
+# need, and then failed to print the header it asked for. A reader who found
+# this one-liner in a README wants the flags, not a network round trip.
+usage() {
+  cat <<'USAGE'
+Install the WitDiff agent integrations into a project (or your home config).
+
+  install.sh                     # into the current directory
+  install.sh /path/to/project    # into a specific project
+  install.sh --global            # into ~/.claude, ~/.config/opencode
+  install.sh --uninstall         # remove what this script installed
+
+Existing files are never overwritten: a skill you have edited is not something
+an installer should silently replace. Each skipped file is reported.
+USAGE
+}
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
 REPO="TahsinArafat/WitDiff"
 BRANCH="main"
 
@@ -57,10 +81,6 @@ for arg in "$@"; do
   case "$arg" in
     --global) GLOBAL=1 ;;
     --uninstall) UNINSTALL=1 ;;
-    -h|--help)
-      sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
     *) TARGET="$arg" ;;
   esac
 done

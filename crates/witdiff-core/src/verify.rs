@@ -26,6 +26,18 @@ pub struct VerifyOptions {
     pub keep_worktree: bool,
 }
 
+/// Whether a changed path is WitDiff's own configuration.
+///
+/// `witdiff.toml` is not production code and not a test, so classifying it as
+/// a production change meant the tool reported its own config as part of the
+/// change under review — and a user who ran `witdiff init` to learn the schema
+/// saw that init file contaminate their next inspect. Only the repository-root
+/// file is meant here: a `witdiff.toml` in a subdirectory belongs to something
+/// else and is ordinary content.
+pub fn is_tool_config(path: &str) -> bool {
+    path == "witdiff.toml"
+}
+
 pub fn inspect_repository(
     repo: &GitRepo,
     config: &Config,
@@ -41,7 +53,7 @@ pub fn inspect_repository(
         .collect();
     let changed_production_files = changed_files
         .iter()
-        .filter(|f| !f.is_test)
+        .filter(|f| !f.is_test && !is_tool_config(&f.path))
         .map(|f| f.path.clone())
         .collect();
     let inline_test_hints = repo.inline_test_hints(&base, &changed_files)?;
@@ -198,11 +210,46 @@ pub fn verify_repository(
         reason = crate::model::Reason::NoDedicatedTestsChanged;
         VerificationStatus::NoChangedTests
     } else {
-        let tmp = TempDir::new().context("failed to allocate temporary verification directory")?;
-        let worktree = tmp.path().join("base");
+        // The worktree must NOT live inside a `TempDir` when the operator asked
+        // to keep it: `TempDir` deletes its whole tree on drop, at the end of
+        // this function, so a retained worktree was removed anyway and the note
+        // named a path that no longer existed. Measured both halves — the
+        // retain ran too late, and the directory it named was inside a
+        // directory that was about to be deleted. When `--keep-worktree` is set
+        // the worktree gets its own directory that nothing else will clean up,
+        // and it is the operator's `git worktree remove` that ends it.
+        let tmp = if options.keep_worktree {
+            None
+        } else {
+            Some(TempDir::new().context("failed to allocate temporary verification directory")?)
+        };
+        let worktree = match &tmp {
+            Some(dir) => dir.path().join("base"),
+            None => TempDir::new()
+                .context("failed to allocate retained verification directory")?
+                .keep()
+                .join("base"),
+        };
         // RAII: the worktree is removed on every exit path, including an early
         // `?` from patch application or test spawning.
         let mut guard = WorktreeGuard::create(repo, &worktree, &base)?;
+
+        // Retain here, immediately, rather than at the end of a successful
+        // experiment. `--keep-worktree` is a request about the *worktree*, not
+        // about the verdict, so it has to hold in every outcome: a base control
+        // failure, an error partway through the experiment, and a panic all
+        // exit through a path that never reached the cleanup. Measured: a run
+        // that printed "base worktree retained at <path>" left nothing at that
+        // path, because retention sat in the `Ok` arm of the result match and
+        // every other path dropped the guard and removed it.
+        //
+        // Doing it here also means the note cannot disagree with the
+        // filesystem: it is written from the same value the guard will honour,
+        // and there is no later step that can remove what it named.
+        if options.keep_worktree {
+            let retained = guard.retain();
+            notes.push(format!("base worktree retained at {}", retained.display()));
+        }
 
         // A gitignored dependency directory does not exist in a worktree, so
         // the base control run cannot start. Link the workspace's copy in when
@@ -342,10 +389,9 @@ pub fn verify_repository(
         // `Drop` still performs best-effort removal.
         let experiment = match experiment_result {
             Ok(result) => {
-                if options.keep_worktree {
-                    let retained = guard.retain();
-                    notes.push(format!("base worktree retained at {}", retained.display()));
-                } else {
+                // `--keep-worktree` already retained the guard just after it
+                // was created, so there is nothing to do here for that case.
+                if !options.keep_worktree {
                     guard.remove()?;
                 }
                 result
@@ -591,8 +637,12 @@ pub fn verify_repository(
     let environment = crate::environment::collect(repo, &command.as_vec());
 
     // Signing is opt-in and happens after the digest, so the signature covers
-    // exactly what was verified. A signing failure never fails verification: the
-    // receipt is still produced, unsigned, and the operator is told (ADR-0022).
+    // exactly what was verified. A signing failure never fails *verification*
+    // (ADR-0022): the receipt is still produced, unsigned, and the operator is
+    // told. Whether the run then exits with `signing_failure_exit_code` is a
+    // separate question, answered by the caller from `signature` being `None`
+    // while a key was configured.
+    let signing_requested = config.verification.signing_key.is_some();
     let mut signature = None;
     if let Some(key_path) = &config.verification.signing_key {
         match verification_digest.as_deref() {
@@ -611,7 +661,7 @@ pub fn verify_repository(
                 }
             }
             None => notes.push(
-                "signing was requested but no verification digest could be computed, so the                  receipt is unsigned"
+                "signing was requested but no verification digest could be computed, so the receipt is unsigned"
                     .to_owned(),
             ),
         }
@@ -684,6 +734,10 @@ pub fn verify_repository(
         // proof for artifacts the receipt just called irrelevant.
         if !evidence_fresh && status.is_verified() {
             status = VerificationStatus::NotVerified;
+            // The reason must move with the status: a `not_verified` receipt
+            // still carrying `proven` would tell a gate reading the machine
+            // token that a stale run was a proof.
+            reason = crate::model::Reason::StaleEvidence;
         }
     }
 
@@ -730,6 +784,7 @@ pub fn verify_repository(
         mutation,
         coverage,
         environment,
+        signing_requested,
     })
 }
 

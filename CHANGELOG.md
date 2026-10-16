@@ -2,7 +2,191 @@
 
 ## Unreleased
 
-Nothing yet.
+### Fixed
+- **WitDiff classified its own config as production code.** Running
+  `witdiff init` to learn the schema meant the next `witdiff inspect` reported
+  `P witdiff.toml` — the tool counting its own configuration as part of the
+  change under review. The config file is now excluded from the production
+  list; it stays in `changed_files`, so provenance still sees it.
+- **`base_dependency_dirs` had an undocumented path contract and no
+  enforcement.** Entries must be repo-relative and resolve inside the base
+  worktree. An absolute path was joined anyway — `worktree.join("/abs")`
+  discards the worktree — and failed with a permission error against an
+  unrelated temp directory; an escaping `..` failed the same way. Both are now
+  rejected before anything is written, naming the config key and the rule.
+  The contract is documented on the field itself.
+- **A dependency copy that could not resolve was reported as reused.** The copy
+  preserves symlinks, which is right for a default pnpm farm (relative links
+  into `.pnpm/`, measured to resolve after the copy) and wrong for a tree that
+  links outside itself — a workspace `link:` entry or a virtual store elsewhere
+  — which copied faithfully and then failed in the base run with
+  ERR_MODULE_NOT_FOUND while the note said the dependencies were reused. Dead
+  links are now named in that note, with `pnpm install --node-linker=hoisted`
+  as the documented workaround.
+- **There was no way to read the config schema without creating it.** `init`
+  discovered git first and refused outside a repository, so a user inspecting
+  WitDiff's options had to run it inside the target repository — and the file it
+  created then showed up as a production change in their next `inspect`.
+  `witdiff init --print` prints what would be written, needs no repository, and
+  writes nothing.
+
+- **`install.sh --help` could not print its own usage through the documented
+  one-liner.** `curl ... | sh -s -- --help` reads `$0` as the interpreter, so
+  `sed "$0"` printed `sed: sh: No such file or directory` and exited 0 — and
+  it downloaded every package tarball first, to show a usage block. Usage is
+  now handled before the download, from a literal heredoc.
+
+- **Targeted test selection built a command cargo rejects.** The changed-test
+  targets were inserted before the subcommand (`cargo --test alpha test ...`),
+  which the real binary answers with `error: unexpected argument '--test'
+  found`. Every narrowed run therefore failed to start and reported
+  `head_failed`. The targets now follow the subcommand, and the unit test that
+  asserted the wrong order has been corrected and extended to the multi-target
+  case.
+- **Stale evidence left `reason: proven` on a downgraded receipt.** The
+  staleness guard reset `status` to `not_verified` but not the machine
+  `reason`, so a gate branching on the token read a stale run as a proof. The
+  new `stale_evidence` reason travels with the status.
+- **`--json` stdout was not machine-stable.** The `--install-toolchains` probe
+  narration and the `--github-annotations` workflow commands were written to
+  stdout, so `witdiff verify --json` with either flag could not be parsed as
+  JSON at all. Both now go to stderr, where GitHub still sees the annotations.
+- **`witdiff uninstall` failed on the Cursor integration.**
+  `installed_integrations` returns `~/.cursor/rules/witdiff.mdc`, a file, but
+  the removal loop called `remove_dir_all` unconditionally, so uninstall exited
+  1 and left the file behind. Removal now dispatches on the path kind, and
+  `removed` no longer counts a path it failed to remove.
+- **`signing_failure_exit_code` was never read.** The key was documented and
+  parsed, and an unsigned receipt exited 0 whatever the setting. The CLI now
+  applies it when — and only when — a signing key was configured; the new
+  additive `signing_requested` receipt field records that distinction.
+- **A `[policy]` `block` override could escalate a finding past its natural
+  severity.** `blocks()` short-circuited on a rule-level `Weight::Block`
+  before looking at the severity, so a policy entry turned a `Warning` — which
+  is reported but does not gate — into a gate failure. That contradicts the
+  section's own doc comment and ADR-0026, which allows a policy to make a rule
+  less blocking and nothing more. `Block` now means "do not waive this rule".
+- **PHP could not see an attribute-style test.** PHPUnit 10 replaced `@test`
+  with the `#[Test]` attribute, and a method carrying it summarized with zero
+  functions — so a deleted attribute-style test reached `verified` with no
+  integrity finding at all, while a real PHPUnit 13 ran it. Verified end to
+  end against a real PHPUnit before and after the fix.
+- **PHP dropped the polarity of a Pest expectation.** `notToBe` rendered an
+  `Eq`, identical to `toBe`, and `->not->toBe(5)` rendered the bare subject, so
+  inverting an expectation — the change that makes a passing test assert
+  failure — reported nothing. The chain is now walked in full rather than
+  stopping at its first member, so `->not`, `->and(...)` and `->skip()` are
+  read too.
+- **PHP could never report a skipped test.** Both `markTestSkipped()` and
+  Pest's `->skip()` reported `skipped: false`, so `skipped_test` could not fire
+  for PHP at all; `markTestSkipped` was additionally rendered as an assertion
+  whose text was the skip message.
+- **PHP predicate and ordered assertions dropped what they assert.**
+  `assertTrue`/`assertFalse` rendered identically, and `assertGreaterThan`,
+  `assertContains`, `assertCount` and friends rendered only one operand, so
+  changing the subject, or replacing a subject with a value that makes the
+  test pass, reported nothing.
+- **A PHP helper whose name merely contains "test" was treated as a test.**
+  `buildTestSubject()` or `getTestData()` are private helpers PHPUnit never
+  runs, but renaming one produced a high-severity `removed_test` and failed
+  the gate on a legitimate refactor.
+- **The receipt schema forbade two operators the tool emits.**
+  `condition_negation` and `numeric_substitution` shipped as real variants but
+  were absent from `mutant_result.operator`, so any receipt produced with
+  mutation enabled failed validation against the repository's own schema.
+  Added, with a test that asserts both directions.
+
+- **`doctor` reported a wrong framework as `ok`.** Two things combined.
+  `Config::load` returned the Rust defaults whenever `witdiff.toml` was
+  absent — and that is the state of every repository before its first
+  `witdiff init` — so a node:test repository was classified `cargo` even
+  though `inferred_for` already knew how to read a `package.json`. The line
+  then printed `ok (cargo)`, because the check it performed is "does this name
+  parse", which passes on a wrong value exactly as happily as on a right one.
+  `load` now infers, and `doctor` distinguishes `inferred` from `ok` so a
+  guessed classifier is never presented as a confirmed one.
+
+- **`--keep-worktree` printed a path that did not exist.** Two independent
+  causes, and the first one hid the second. Retention sat in the `Ok` arm of the
+  experiment result, so a base control failure or an error part-way through
+  returned before it, dropped the guard, and removed the worktree — the paths
+  where an operator most wants the tree. Separately, the worktree was created
+  *inside* a `TempDir`, which deletes its whole tree at the end of the run, so
+  even a successful run left nothing at the path it had just named. A retained
+  worktree now gets a directory nothing else cleans up, and retention happens
+  immediately after the worktree is created. The existing test only checked that
+  the note appeared, which is how both shipped; it now checks the directory.
+- **`--no-write --json --output <path>` silently produced no file.** The receipt
+  write is guarded by `if !no_write`, and `--output` is passed *into* the call
+  that guard protects, so the path was discarded along with the write. Exit 2,
+  no file, nothing on stderr. `--output` now conflicts with `--no-write`, so the
+  pair is rejected at startup instead of being accepted and quietly ignored.
+
+- **A node:test run was never recognised, and the advice sent the reader after
+  the wrong problem.** The JavaScript classifier knew only Jest and Vitest,
+  which share no vocabulary with the built-in runner: no `● ` glyph, no
+  `Tests: N failed`. A genuine `ERR_ASSERTION` on the base run therefore
+  classified as not-a-test-failure, so a correct red/green change reported
+  `unrecognized_failure_kind` and the whole Node ecosystem on the built-in
+  runner was uncovered. `--test-reporter=tap` did not help, though TAP is a
+  standard format; both reporters are now recognised. Measured against node
+  v26.7.0. A green run is explicitly still not a failure, since both reporters
+  print a `fail` line on success.
+- **The `next` line diagnosed a cause WitDiff had not established.** One string
+  served every non-verified status, so `unrecognized_failure_kind` — where the
+  tool knows only that it could not read the output — was told "the test passes
+  on the base revision too... add an assertion that fails without the change",
+  which is the opposite of what happened. The same sentence was printed for a
+  base-control failure, where adding an assertion cannot help because the base
+  suite is already red. The advice now follows `reason`, and a cause WitDiff
+  does not understand is reported as unread rather than diagnosed.
+
+- **Python: a `raises` block was not an assertion, and reported the test as
+  empty.** `with pytest.raises(...)` and `with self.assertRaises(...)` were
+  collected nowhere, so a test built from one summarized with zero assertions
+  *and* zero guards: deleting the block produced a summary byte-identical to
+  keeping it, and the test was separately reported `assertion_free_test`,
+  which is false — it fails when nothing is raised. `if not ok: raise
+  AssertionError` — the exact case `testshape.rs:57` names as one that must be
+  seen — was also uncollected. Both are now guards. A plain `raise ValueError`
+  is still not a guard: that is the code under test, not a check. Measured with
+  a real interpreter before the fix.
+- **Java: `assertThrows` rendered as nothing.** Its argument is an `Executable`
+  lambda, which the JDK parser never descends into, so the call produced no
+  assertion and the test was reported `assertion_free_test` — false, since
+  assertThrows fails when the exception is not raised. It now renders as an
+  exception expectation, the same form the other analyzers use. Measured with a
+  real JDK before the fix.
+
+- **Go: testify assertions were invisible.** `failureCall` recognised only
+  the six `*testing.T` methods, so `assert.Equal`, `require.NoError` and
+  `assert.True` were not counted as assertions *or* as guards — a testify-only
+  test summarized with both empty. Deleting its last assertion was therefore
+  indistinguishable from an unchanged test, and it reported nothing. Measured
+  against the real Go toolchain before the fix. `assert` and `require` are now
+  rendered as the comparison they make, and deliberately identically: they
+  differ only in whether the test aborts, not in what it claims.
+
+- **Go: a guard negation is reported as a changed expectation.** Go has no
+  assertion keyword, so the guard condition *is* the assertion and the engine
+  compares it whole; `if isEven(2)` -> `if !isEven(2)` therefore reads as a
+  changed expectation rather than as the same check. Reported in both
+  directions, and measured with the real Go toolchain before and after. This
+  is now pinned by a test rather than changed: a variant fix that stripped the
+  `!` also silenced the genuinely weakening direction, which is a worse failure
+  than a blunt one.
+
+### Documentation
+- Removed the stale "22 ADRs" count from the README, replaced "a real parser
+  for all seven languages" with wording that is true of PHP's tokenizer and
+  JS's project-supplied parser, and fixed a mangled signing note in `verify.rs`.
+- `support-matrix.md` said capabilities 2 and 3 are Rust-only while its own
+  matrix listed structural integrity findings for every language, and listed
+  JUnit and RSpec as frameworks that "fail loudly" while recognising them as
+  supported. Both corrected.
+- AGENTS.md claimed CI runs the `--ignored` suite "with every toolchain
+  installed". CI has no PHP step, so the three PHP end-to-end tests skip. Now
+  says so and points at roadmap M9.
 
 ## 1.0.0-alpha.4
 

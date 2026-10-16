@@ -164,7 +164,18 @@ impl TestFramework {
             TestFramework::JavaScript => {
                 // Jest and Vitest both print a "Tests:" summary where a failed
                 // count appears, e.g. "Tests: 1 failed, 1 passed, 2 total".
-                lower.contains("● ") && lower.contains("failed") || has_jest_failed_count(lower)
+                //
+                // node:test is the third JS runner, and it shares none of those
+                // markers. Its default reporter prints `ℹ fail 1` on a summary
+                // block; `--test-reporter=tap` prints `not ok 1 - <name>` and a
+                // `# fail N` trailer. Measured against node v26.7.0: a genuine
+                // `AssertionError [ERR_ASSERTION]` on a base run classified as
+                // *not* a test failure, so a correct red/green change reported
+                // `unrecognized_failure_kind` and the whole Node ecosystem built
+                // on the built-in runner was uncovered.
+                lower.contains("● ") && lower.contains("failed")
+                    || has_jest_failed_count(lower)
+                    || has_node_test_failed_count(lower)
             }
             TestFramework::Go => {
                 lower.contains("--- fail:")
@@ -430,6 +441,42 @@ fn has_surefire_failure_count(lower: &str) -> bool {
 }
 
 /// Whether Jest or Vitest reports a non-zero failed test count.
+/// Whether node:test reported at least one failing test.
+///
+/// TAP is a standard format and the default reporter is a variant of it, so both
+/// are accepted. Measured against node v26.7.0:
+///
+/// ```text
+/// default reporter:  ℹ fail 1
+/// TAP reporter:      not ok 1 - three is odd
+///                    # fail 1
+/// ```
+///
+/// A zero count is deliberately not a failure: `# fail 0` is what a green run
+/// prints, and reading it as a failure would invert the verdict. The `not ok`
+/// form is already an explicit per-test failure, so its presence is enough on its
+/// own.
+fn has_node_test_failed_count(lower: &str) -> bool {
+    if lower.contains("\nnot ok ") || lower.starts_with("not ok ") {
+        return true;
+    }
+    lower.lines().any(|line| {
+        // The TAP trailer is `# fail 1` and the default reporter's summary
+        // block is `ℹ fail 1`, so the leading marker is whatever non-word
+        // character the reporter used.
+        let trimmed = line
+            .trim()
+            .trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+        let Some(rest) = trimmed.strip_prefix("fail") else {
+            return false;
+        };
+        // `fail 1` has a space, `fail: 1` a colon. `# failures 1` is not this
+        // counter and is deliberately not matched.
+        let rest = rest.trim_start().strip_prefix(':').unwrap_or(rest).trim();
+        rest.parse::<u64>().map(|n| n > 0).unwrap_or(false)
+    })
+}
+
 fn has_jest_failed_count(lower: &str) -> bool {
     for line in lower.lines() {
         let trimmed = line.trim();
@@ -555,6 +602,61 @@ mod tests {
         assert_eq!(
             TestFramework::JavaScript.classify("", stderr, Some(1)),
             FailureKind::CompileError
+        );
+    }
+
+    /// Captured from a real `node --test` run on node v26.7.0, default reporter.
+    ///
+    /// The whole Node ecosystem built on the built-in runner was unreachable
+    /// without this: a genuine `ERR_ASSERTION` on the base run classified as
+    /// *not* a test failure, so a correct red/green change reported
+    /// `unrecognized_failure_kind` and was told to "add an assertion that fails
+    /// without the change" — advice that cannot apply to a run it never read.
+    #[test]
+    fn node_test_default_reporter_failure_is_recognized() {
+        let stdout = "✖ three is odd (0.564167ms)\nℹ fail 1\n✖ failing tests:\n✖ three is odd (0.564167ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n  1 !== 0\n\nℹ tests 1\nℹ pass 0\nℹ fail 1\n";
+        assert_eq!(
+            TestFramework::JavaScript.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// The same run under `--test-reporter=tap`. TAP is a standard format, so
+    /// the documented escape hatch the user reached for had to work.
+    #[test]
+    fn node_test_tap_reporter_failure_is_recognized() {
+        let stdout = "TAP version 13\n# Subtest: three is odd\nnot ok 1 - three is odd\n  ---\n  error: '-\n    actual: 0\n    expected: 1\n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  ...\n1..1\n# tests 1\n# pass 0\n# fail 1\n";
+        assert_eq!(
+            TestFramework::JavaScript.classify(stdout, "", Some(1)),
+            FailureKind::TestFailure
+        );
+    }
+
+    /// A green node:test run must not be read as a failure. Both reporters print
+    /// a `fail` line on success — `# fail 0` and `ℹ fail 0` — so reading the
+    /// word rather than the count would invert every green run.
+    #[test]
+    fn a_green_node_test_run_is_not_a_failure() {
+        let tap = "TAP version 13\nok 1 - zero is even\n1..1\n# tests 1\n# pass 1\n# fail 0\n";
+        assert_eq!(
+            TestFramework::JavaScript.classify(tap, "", Some(0)),
+            FailureKind::CommandFailure
+        );
+        let default = "✔ zero is even (0.412ms)\nℹ tests 1\nℹ pass 1\nℹ fail 0\n";
+        assert_eq!(
+            TestFramework::JavaScript.classify(default, "", Some(0)),
+            FailureKind::CommandFailure
+        );
+    }
+
+    /// A TAP skip is not a failure. `node --test` reports skipped tests on the
+    /// `# skip 1` line, which must not be confused with a failed count.
+    #[test]
+    fn a_skipped_node_test_is_not_a_failure() {
+        let tap = "TAP version 13\nok 1 - zero is even # SKIP\n1..1\n# tests 1\n# pass 0\n# skipped 1\n# fail 0\n";
+        assert_ne!(
+            TestFramework::JavaScript.classify(tap, "", Some(0)),
+            FailureKind::TestFailure
         );
     }
 

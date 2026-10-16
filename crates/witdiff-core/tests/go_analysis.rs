@@ -202,3 +202,88 @@ fn rebinding_does_not_hide_a_real_change() {
         rules(&findings)
     );
 }
+
+/// Go has no assertion keyword, so the guard condition IS the assertion and the
+/// engine compares it whole. Negating a guard therefore reads as a changed
+/// expectation rather than as the same check.
+///
+/// Measured before this test existed, with the real Go toolchain:
+///   `isEven(2)` -> `!isEven(2)`   High removed_assertion
+///   `!isEven(2)` -> `isEven(2)`   High removed_assertion
+///   `isEven(2)` -> guard deleted  High removed_assertion x2
+///
+/// A variant fix that stripped the `!` without a matching space made all of
+/// those report ZERO, silently allowing the real weakening through. So this is
+/// pinned as measured rather than tidied up: the report is blunt, not wrong.
+#[test]
+#[ignore = "end-to-end: spawns the Go toolchain; run with -- --ignored"]
+fn negating_a_guard_is_reported_as_a_changed_expectation() {
+    let base = go_test("TestEven", "isEven(2)");
+    let head = go_test("TestEven", "!isEven(2)");
+    assert!(
+        !analyze(Some(&base), &head).is_empty(),
+        "adding a negation to a guard changes when the test fails and must be reported"
+    );
+    assert!(
+        !analyze(Some(&head), &base).is_empty(),
+        "removing a negation from a guard must be reported too"
+    );
+}
+
+/// A testify test in its idiomatic form.
+fn testify_test(name: &str, call: &str) -> String {
+    format!(
+        "package sample\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc {name}(t *testing.T) {{\n    {call}\n}}\n"
+    )
+}
+
+/// testify is the most used Go assertion library, and its calls are not
+/// `t.Error*`, so nothing recognized them: every testify-only test summarized
+/// with zero assertions AND zero guards, which is why a test whose only
+/// assertion was deleted could not be reported at all.
+///
+/// Measured before `testifyCall` existed, with the real toolchain:
+///   assert.Equal -> []   require.NoError -> []   assert.True -> []
+#[test]
+#[ignore = "end-to-end: spawns the Go toolchain; run with -- --ignored"]
+fn testify_assertions_are_seen() {
+    let base = testify_test("TestAdd", "assert.Equal(t, 5, Add(2, 3))");
+    let head = testify_test("TestAdd", "assert.Equal(t, 6, Add(2, 3))");
+    let findings = analyze(Some(&base), &head);
+    assert!(
+        rules(&findings).contains(&"changed_expected_value"),
+        "inverting a testify expectation must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// And a testify test that loses its assertion is reported, which it could not
+/// be before: with zero assertions on both sides there was nothing to compare.
+#[test]
+#[ignore = "end-to-end: spawns the Go toolchain; run with -- --ignored"]
+fn deleting_a_testify_assertion_is_reported() {
+    let base = testify_test("TestAdd", "assert.Equal(t, 5, Add(2, 3))");
+    let head = testify_test("TestAdd", "t.Log(\"no check\")");
+    let findings = analyze(Some(&base), &head);
+    assert!(
+        rules(&findings).contains(&"removed_assertion"),
+        "removing the only assertion must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// `require` aborts where `assert` continues, but both assert the same thing,
+/// so a package swap must not read as a change to what the test checks.
+#[test]
+#[ignore = "end-to-end: spawns the Go toolchain; run with -- --ignored"]
+fn swapping_assert_for_require_is_not_reported() {
+    let base = testify_test("TestAdd", "assert.Equal(t, 5, Add(2, 3))");
+    let head = testify_test("TestAdd", "require.Equal(t, 5, Add(2, 3))")
+        .replace("testify/assert", "testify/require");
+    let findings = analyze(Some(&base), &head);
+    assert!(
+        findings.is_empty(),
+        "require and assert make the same claim, got {:?}",
+        rules(&findings)
+    );
+}

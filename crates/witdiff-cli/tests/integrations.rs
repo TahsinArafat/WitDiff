@@ -695,6 +695,105 @@ fn the_integrations_installer_installs_when_piped() {
     }
 }
 
+/// `--help` through the piped form — the form the README standardizes on —
+/// printed `sed: sh: No such file or directory` and exited 0, because `$0` is
+/// the interpreter when a script is read from stdin and `sed "$0"` then has no
+/// file to read. It also downloaded the whole package tarball first, to show
+/// usage text. Both are gone: usage is handled before any download, and the
+/// text is a literal heredoc rather than a read of `$0`.
+#[test]
+fn the_piped_help_prints_usage_without_downloading() {
+    let dir = integrations();
+    let script = std::fs::read_to_string(dir.join("install.sh")).expect("read install.sh");
+
+    let work = tempfile::TempDir::new().expect("temp dir");
+    let mut child = std::process::Command::new("sh")
+        .arg("-s")
+        .arg("--")
+        .arg("--help")
+        .current_dir(work.path())
+        // Any leftover state that would reach the network must not matter:
+        // usage has to be handled before the download block runs.
+        .env_remove("WITDIFF_INSTALL_ALL")
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run the installer through a pipe");
+    {
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(script.as_bytes())
+            .expect("write the script to the shell");
+    }
+    let output = child.wait_with_output().expect("wait for help");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "help must exit 0; stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Install the WitDiff agent integrations"),
+        "usage header missing; stdout: {stdout} stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("--uninstall"),
+        "the flags a README reader needs must be listed; stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("sed:") && !stderr.contains("sed:"),
+        "usage must not come from `sed \"$0\"`, which is the interpreter when piped:          stdout: {stdout} stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Downloading them from"),
+        "showing usage must not download the packages; stderr: {stderr}"
+    );
+}
+
+/// `witdiff init --print` must work with no git repository and must write
+/// nothing.
+///
+/// The only way to read the config schema before this flag existed was to run
+/// `init` inside a target repository — it discovered git first and refused
+/// otherwise — and running it created the very file that then showed up as a
+/// production change in the user's next `inspect`. Reading a schema needs
+/// neither.
+#[test]
+fn init_print_writes_nothing_and_needs_no_repository() {
+    let binary = env!("CARGO_BIN_EXE_witdiff");
+    let sandbox = tempfile::TempDir::new().expect("temp dir");
+    // Deliberately not a git repository: that is the point of the flag.
+    assert!(!sandbox.path().join(".git").exists());
+
+    let output = std::process::Command::new(binary)
+        .arg("init")
+        .arg("--print")
+        .current_dir(sandbox.path())
+        .output()
+        .expect("run witdiff init --print");
+
+    assert!(
+        output.status.success(),
+        "init --print must succeed outside a repository; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[project]") && stdout.contains("test_command"),
+        "the printed config must be a complete starter; got: {stdout}"
+    );
+    assert!(
+        !sandbox.path().join("witdiff.toml").exists(),
+        "--print must not create the file it printed"
+    );
+}
+
 /// The platform-detection branch and the archive mapping must agree.
 ///
 /// `detect_target` decides which triple this machine is; the mapping below it

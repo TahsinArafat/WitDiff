@@ -130,8 +130,10 @@ prints `1 example, 1 failure` in the singular, or that a real parser emits
 `Literal` where the code expected `NumericLiteral`. **Write the test, run it
 against the real tool, and believe the output over the code.**
 
-CI runs the `--ignored` suite with every toolchain installed, so this work cannot
-rot silently. Four things had to be fixed for it to run there at all, all found
+CI runs the `--ignored` suite with every toolchain except PHP installed, so this
+work cannot rot silently. (The three PHP end-to-end tests skip without
+`WITDIFF_PHPUNIT_VENDOR`; adding PHP to CI is open in roadmap M9.) Four things
+had to be fixed for it to run there at all, all found
 by running it rather than by reading it:
 
 - the reusable workflow's exit code was never captured, because GitHub runs an

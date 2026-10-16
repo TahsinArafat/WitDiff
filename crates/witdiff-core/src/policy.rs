@@ -138,10 +138,16 @@ impl PolicyConfig {
         if self.ignore_for(path).is_some() {
             return false;
         }
+        let natural = severity == Severity::High;
         match self.weight_for(rule).map(|entry| entry.weight) {
-            Some(Weight::Block) => true,
+            // A policy may only relax a rule, never tighten one. `Weight::Block`
+            // on a rule that would not otherwise block was previously read as
+            // "make it blocking", so a `[policy]` entry could turn a Warning
+            // into a gate failure — the opposite of what the section documents
+            // and of ADR-0026.
+            Some(Weight::Block) => natural,
             Some(Weight::Warn | Weight::Ignore) => false,
-            None => severity == Severity::High,
+            None => natural,
         }
     }
 
@@ -240,10 +246,14 @@ mod tests {
         assert!(policy.blocks("removed_assertion", "vendored/a.rs", Severity::High));
     }
 
-    /// `Block` exists so a policy can be explicit about a rule it considers
-    /// blocking, and it must still block a `Warning`.
+    /// `Block` means "do not waive this rule", not "make this rule block".
+    ///
+    /// It previously blocked a `Warning` that would otherwise have been
+    /// reported and not gated, so a policy entry could *tighten* the gate. That
+    /// contradicts this module's own doc comment and ADR-0026, which allows a
+    /// policy to make a rule less blocking and nothing more.
     #[test]
-    fn an_explicit_block_override_blocks() {
+    fn an_explicit_block_override_cannot_make_a_warning_blocking() {
         let policy = PolicyConfig {
             rules: vec![RuleOverride {
                 rule: "trivial_assertion".into(),
@@ -252,7 +262,37 @@ mod tests {
             }],
             ignore_paths: Vec::new(),
         };
-        assert!(policy.blocks("trivial_assertion", "tests/a.rs", Severity::Warning));
+        assert!(
+            !policy.blocks("trivial_assertion", "tests/a.rs", Severity::Warning),
+            "a policy may not escalate a finding past its natural severity"
+        );
+        // It still blocks a rule that is naturally blocking, so stating it
+        // explicitly is not a no-op.
+        assert!(policy.blocks("trivial_assertion", "tests/a.rs", Severity::High));
+    }
+
+    /// And the override must be recorded as a waiver only when it changed
+    /// something: with `Block` on a naturally-blocking rule nothing is
+    /// waived, so the receipt must not claim otherwise.
+    #[test]
+    fn a_block_override_that_relaxes_nothing_is_not_a_waiver() {
+        let policy = PolicyConfig {
+            rules: vec![RuleOverride {
+                rule: "removed_assertion".into(),
+                weight: Weight::Block,
+                reason: "this rule must never be waived".into(),
+            }],
+            ignore_paths: Vec::new(),
+        };
+        let waivers = policy.waivers(&[(
+            "removed_assertion".into(),
+            "tests/a.rs".into(),
+            Severity::High,
+        )]);
+        assert!(
+            waivers.is_empty(),
+            "nothing was relaxed, so nothing should be reported as waived: {waivers:?}"
+        );
     }
 
     /// The waiver record is what stops a silenced rule from being invisible.

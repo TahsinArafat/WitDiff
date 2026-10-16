@@ -236,3 +236,55 @@ fn a_new_file_produces_no_comparative_findings() {
         rules(&findings)
     );
 }
+
+/// JUnit 5's `assertThrows` takes an `Executable` lambda, and the JDK parser
+/// never descends into a lambda body — so the call rendered as nothing and a
+/// test built from one summarized with zero assertions.
+///
+/// Measured before the fix, with a real JDK: the test was reported
+/// `assertion_free_test`, which is false: assertThrows fails when the
+/// exception is not raised.
+#[test]
+#[ignore = "end-to-end: spawns the JDK; run with -- --ignored"]
+fn an_assert_throws_test_is_not_assertion_free() {
+    // `existing.is_none()` is required by the rule, so the name must be absent
+    // from the base: an empty base is the only way to get there here.
+    let head = java_test(
+        "rejects",
+        "assertThrows(ValueError.class, () -> parse(\"bad\"));",
+    );
+    let findings = analyze(Some(""), &head);
+    assert!(
+        !rules(&findings).contains(&"assertion_free_test"),
+        "assertThrows checks behaviour, got {:?}",
+        rules(&findings)
+    );
+
+    // And a test that genuinely asserts nothing is still reported, so the
+    // rule above is not simply disabled.
+    let inert = java_test("touches", "int value = compute();");
+    let findings = analyze(Some(""), &inert);
+    assert!(
+        rules(&findings).contains(&"assertion_free_test"),
+        "a new test with no check at all must still be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// And the exception expectation counts as a constraint, so deleting it is
+/// reported the same way a deleted assertion is.
+#[test]
+#[ignore = "end-to-end: spawns the JDK; run with -- --ignored"]
+fn removing_an_assert_throws_is_reported() {
+    let base = java_test(
+        "rejects",
+        "assertThrows(ValueError.class, () -> parse(\"bad\"));",
+    );
+    let head = java_test("rejects", "parse(\"bad\");");
+    let findings = analyze(Some(&base), &head);
+    assert!(
+        !findings.is_empty(),
+        "a test that no longer expects the exception must be reported, got {:?}",
+        rules(&findings)
+    );
+}

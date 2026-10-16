@@ -12,7 +12,9 @@ The product has three capabilities that can be adopted independently:
 3. **Changed-code mutation** — supplementary evidence about how tightly the
    tests constrain the changed code.
 
-Capability 1 is language-neutral. Capabilities 2 and 3 are **Rust-only**.
+Capability 1 is language-neutral. Capability 2 is implemented for every
+language in the matrix below. Capability 3 and targeted test selection are
+Rust-only for now.
 
 ## Matrix
 
@@ -59,8 +61,23 @@ base control green, and base-plus-transplanted-test red **for a recognized test
 reason**. Verifying an analyzer against a real parser is not the same as
 proving the verification works, and this file makes that distinction explicit.
 
-JavaScript classification is also covered by unit tests against captured Jest
-and Vitest output.
+JavaScript classification is also covered by unit tests against captured Jest,
+Vitest and `node:test` output.
+
+`node:test` is the built-in runner, and shares no vocabulary with Jest or
+Vitest: neither the `● ` failure glyph nor the `Tests: N failed` summary. Both of
+its reporters are now recognised, measured against node v26.7.0:
+
+```text
+default reporter   ℹ fail 1
+TAP reporter       not ok 1 - three is odd      (--test-reporter=tap)
+                   # fail 1
+```
+
+TAP is a standard format, so `--test-reporter=tap` is a working escape hatch
+rather than another thing to try. A green run is explicitly *not* a failure:
+both reporters print a `fail` line on success (`# fail 0`, `ℹ fail 0`), so the
+count is read rather than the word.
 
 ## Python structural analysis (ADR-0016)
 
@@ -93,6 +110,28 @@ Two limitations to know:
   source, so it reports what the test says rather than what a particular
   interpreter invocation would execute.
 
+A test does not have to contain a bare `assert` to be checking something. These
+are read as failure guards, and count as evidence of behaviour:
+
+```python
+with pytest.raises(ValueError):     # the block must raise
+    parse(text)
+
+with self.assertRaises(ValueError): # the unittest spelling of the same
+    parse(text)
+
+if not ok:                          # a check with no assertion in sight
+    raise AssertionError("unexpected")
+```
+
+The first two were collected nowhere before: a test built from one summarized
+with zero assertions *and* zero guards, so deleting the `raises` block produced
+a summary identical to keeping it — and the test was separately reported
+`assertion_free_test`, which is false, since it fails when nothing is raised. A
+plain `raise ValueError` is deliberately *not* a guard: that is the code under
+test, not a check, and treating it as one would make every error-handling test
+look guarded.
+
 ## Go structural analysis (ADR-0017)
 
 Go test files are analyzed with `go/ast` from the standard library, run through
@@ -114,6 +153,18 @@ The failure message is not the assertion. Verified end to end: rewording
 `t.Errorf("got %d", ...)` to `t.Errorf("addition is wrong: %d", ...)` produces no
 finding, because comparing messages would report a reworded message as a changed
 expectation and would miss an inverted condition entirely.
+
+[testify](https://github.com/stretchr/testify) assertions are read too, since they
+are the common alternative to a guarded `t.Errorf` and are not `t.Error*` calls:
+```go
+assert.Equal(t, 5, Add(2, 3))   // Add(2, 3) Eq 5
+require.NoError(t, doWork())    // doWork() NotEq nil
+```
+Every testify function takes `t` first, so the operands are the arguments after
+it, and `assert.Equal` is `(expected, actual)` — the same order as a binary
+comparison. `assert` and `require` render identically on purpose: they differ in
+whether the test aborts after failing, not in what the test claims, so migrating
+a suite from one to the other is not a change to any assertion.
 
 Detected: `removed_assertion` (including the Go-specific case of a test whose
 guard was deleted so it asserts nothing), `weakened_assertion`,
@@ -142,8 +193,16 @@ Detected: `removed_assertion`, `weakened_assertion`, `changed_expected_value`,
 
 Recognized forms: `assertEquals`/`assertNotEquals`/`assertSame`/`assertNotSame`
 (with the swap), `assertTrue`/`assertFalse`, `assertNull`/`assertNotNull`,
-`assertArrayEquals`, and the bare `if (cond) fail(...)` shape. `@Disabled` and
+`assertArrayEquals`, `assertThrows`/`assertDoesNotThrow`, and the bare
+`if (cond) fail(...)` shape. `@Disabled` and
 `@Ignore` are the skip markers, reported only when newly added.
+
+`assertThrows` takes an `Executable` lambda and the JDK parser never descends
+into a lambda body, so the call yields no comparable expression. It is rendered
+as an exception expectation — the same form the Python and PHP analyzers use —
+so a test built from one counts as checking behaviour and is not reported
+`assertion_free_test`. It failed as though it asserted nothing, which is the
+opposite of what it does: it fails when the exception is *not* raised.
 
 Requirements: a **JDK**, not a bare JRE, because the analysis compiles the tool
 in memory. A JRE-only environment is reported explicitly rather than mistaken
@@ -455,9 +514,11 @@ pattern list.
 
 ## What is not supported anywhere
 
-- Test frameworks beyond the four above. An unrecognized `framework` value is a
-  configuration error rather than a silent fallback (ADR-0012), so a JUnit or
-  RSpec project fails loudly instead of producing a wrong-conservative result.
+- Test frameworks outside the six supported families — pytest, go test, JUnit,
+  Minitest/RSpec, Jest/Vitest, PHPUnit/Pest. An unrecognized `framework` value
+  is a configuration error rather than a silent fallback (ADR-0012), so a
+  project using an unsupported framework fails loudly instead of producing a
+  wrong-conservative result.
 - Multi-language monorepos with per-directory test commands. One
   `test_command` applies to the whole repository, so a repo mixing Rust and
   Python needs two WitDiff configurations or a wrapper script.

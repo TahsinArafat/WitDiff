@@ -76,11 +76,19 @@ impl<'repo> WorktreeGuard<'repo> {
         self.repo.remove_worktree(&self.path)
     }
 
-    /// Relinquish cleanup and hand ownership of the worktree to the caller.
+    /// Relinquish cleanup and leave the worktree in place, returning its path.
     ///
     /// Used by `--keep-worktree`, where retaining the worktree is the requested
     /// behavior rather than a leak.
-    pub fn retain(mut self) -> PathBuf {
+    ///
+    /// Takes `&mut self` rather than `self` so retention is a flag on the guard
+    /// and not a transfer of it. Consuming `self` forced every caller to place
+    /// the call on a path that could then not use the guard again, which is
+    /// exactly why retention used to sit at the end of a successful experiment:
+    /// the one place a consumed guard could be retained was the one place where
+    /// nothing had gone wrong. `--keep-worktree` is a request about the
+    /// worktree, so it has to be honoured before anything can fail.
+    pub fn retain(&mut self) -> PathBuf {
         self.finished = true;
         self.path.clone()
     }

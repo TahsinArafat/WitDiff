@@ -97,6 +97,21 @@ pub struct VerificationConfig {
     ///
     /// Opt-in and explicit: this changes what the base experiment executes,
     /// which is a semantic decision about evidence rather than a convenience.
+    ///
+    /// **Each entry is a repo-relative path that must resolve inside the base
+    /// worktree** — `node_modules`, `vendor`, not an absolute path and not one
+    /// containing `..`. The contract was undocumented and unenforced until
+    /// late 2025, so an absolute path was joined anyway (`worktree.join("/abs")`
+    /// discards the worktree) and failed with a permission error naming a path
+    /// the user recognised and a root they did not; `link_dependencies` now
+    /// rejects both forms before anything is written, naming this key.
+    ///
+    /// A copied tree is copied with its symlinks preserved. That is correct for
+    /// a default pnpm farm (relative links into `.pnpm/`, measured to resolve
+    /// after the copy) and wrong for a tree that links outside itself (workspace
+    /// `link:` entries, a virtual store elsewhere): such links copy faithfully
+    /// and then fail in the base run. Dangling targets are reported in the
+    /// receipt note rather than surfacing as an unexplained ERR_MODULE_NOT_FOUND.
     #[serde(default)]
     pub base_dependency_dirs: Vec<String>,
     /// Run the test command inside a container instead of on the host.
@@ -301,7 +316,15 @@ impl Config {
     pub fn load(repo_root: &Path) -> Result<Self> {
         let path = repo_root.join("witdiff.toml");
         if !path.exists() {
-            return Ok(Self::default());
+            // Infer from the repository rather than falling back to the Rust
+            // defaults. `Self::default()` is a Rust project, so a repository
+            // with no witdiff.toml — which is every repository before the first
+            // `witdiff init` — was configured as `cargo` no matter what it
+            // contained. Measured: a TypeScript repository using node:test was
+            // classified `cargo`, and `doctor` reported that as `ok`. The
+            // failure is silent because a wrong value looks exactly like a
+            // right one until the classifier meets output it does not know.
+            return Ok(Self::inferred_for(repo_root));
         }
         let text = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
@@ -600,6 +623,34 @@ mod inference_tests {
             std::fs::write(dir.path().join(name), "").expect("write marker");
         }
         Config::inferred_for(dir.path())
+    }
+
+    /// `Config::load` used to return `Self::default()` when witdiff.toml was
+    /// absent, which is a Rust project. That is the state of every repository
+    /// before its first `witdiff init`, so it is the state the tool actually
+    /// ran in: a node:test repository was classified `cargo`, and `doctor`
+    /// reported that as `ok` because "does the name parse" passes on a wrong
+    /// value exactly as happily as on a right one. `load` now infers.
+    #[test]
+    fn a_repository_without_a_config_file_is_inferred_not_defaulted() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(dir.path().join("package.json"), "{}").expect("write marker");
+
+        let loaded = Config::load(dir.path()).expect("load must not require a config file");
+        assert_eq!(
+            loaded.verification.framework, "javascript",
+            "a package.json must be recognised without a witdiff.toml"
+        );
+        assert_ne!(
+            loaded.verification.framework, "cargo",
+            "the Rust default must not be used for a JavaScript repository"
+        );
+
+        // And a Rust repository still gets the Rust defaults, unchanged.
+        let rust_dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(rust_dir.path().join("Cargo.toml"), "").expect("write marker");
+        let rust = Config::load(rust_dir.path()).expect("load");
+        assert_eq!(rust.verification.framework, "cargo");
     }
 
     /// Writing Rust defaults into a Python repository would make the first
