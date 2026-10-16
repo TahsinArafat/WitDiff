@@ -148,6 +148,11 @@
         "null"
       ]
     },
+    "signing_requested": {
+      "description": "Whether a signing key was configured for this run. Lets a reader tell an intentionally unsigned receipt from one where signing was asked for and failed, which is what `signing_failure_exit_code` acts on. Additive and optional: a receipt written before this field existed omits it and means `false`.",
+      "type": "boolean",
+      "default": false
+    },
     "signature": {
       "description": "A detached Ed25519 signature over the domain separator, the status and the verification digest. Proves the receipt was not edited after the run and that it describes the recorded code. It does NOT prove who produced it: that is tamper-evidence, not non-repudiation (ADR-0022). The status is included because signing the digest alone left the receipt's headline claim editable while the signature still verified.",
       "type": [
@@ -183,6 +188,7 @@
       "enum": [
         "proven",
         "proven_with_integrity_warnings",
+        "stale_evidence",
         "base_also_passes",
         "base_control_failed",
         "base_control_timed_out",
@@ -433,7 +439,9 @@
             "equality_flip",
             "comparison_boundary",
             "logical_flip",
-            "boolean_flip"
+            "boolean_flip",
+            "condition_negation",
+            "numeric_substitution"
           ]
         },
         "line": {

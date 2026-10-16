@@ -41,7 +41,27 @@ use crate::testshape::{Assertion, FileSummary, Operators, TestFunction};
 /// so the comparison markers are spelled with surrounding spaces to avoid
 /// matching inside identifiers.
 const OPERATORS: Operators = Operators {
-    comparisons: &[" != ", " == ", " < ", " <= ", " > ", " >= ", " && ", " || "],
+    comparisons: &[
+        " != ",
+        " == ",
+        " < ",
+        " <= ",
+        " > ",
+        " >= ",
+        " && ",
+        " || ",
+        " Eq ",
+        " NotEq ",
+        " Gt ",
+        " Gte ",
+        " Lt ",
+        " Lte ",
+        " Contains ",
+        " NotContains ",
+        " Is ",
+        " IsNot ",
+        " Not ",
+    ],
     unary: &["! ", "-", "+", "~"],
     trivials: &["true", "false", "1", "0", "nil", "len(nil) == 0"],
 };
@@ -316,6 +336,14 @@ mod tests {
 
     /// The vocabulary must match what the script emits: Go renders operators
     /// as themselves, unlike Python's `NotEq`.
+    ///
+    /// The unary entry is the one place it does not match literally: the
+    /// script renders `!ok` with no space, and `"! "` is kept anyway. Changing
+    /// it to `"!"` was measured and is NOT a correction — with the subject
+    /// actually stripped, `if isEven(2)` -> `if !isEven(2)` and its reverse
+    /// both stopped being reported, including the reverse, which is a genuine
+    /// weakening. See `negating_a_guard_is_reported_as_a_changed_expectation`
+    /// in tests/go_analysis.rs.
     #[test]
     fn the_go_operator_vocabulary_matches_the_script() {
         assert!(OPERATORS.comparisons.contains(&" != "));

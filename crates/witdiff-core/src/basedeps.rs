@@ -125,6 +125,34 @@ pub fn link_dependencies(
         return Ok(outcome);
     }
 
+    // `base_dependency_dirs` entries must be repo-relative paths that resolve
+    // inside the worktree. This contract was undocumented and unenforced: an
+    // absolute path was joined anyway — `worktree.join("/abs")` discards the
+    // worktree entirely — and an escaping `..` walked out of it, after which
+    // the copy failed with a permission error that named a path the user
+    // recognised and a root they did not. Reject both before anything is
+    // written, naming the contract and the config key.
+    for name in configured {
+        let path = Path::new(name);
+        let escapes = path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir));
+        if escapes {
+            return Err(anyhow::anyhow!(
+                "`verification.base_dependency_dirs` entries must be relative paths inside the \
+                 repository; `{name}` is {} and would resolve outside the base worktree. Use a \
+                 path like `node_modules` (relative to the repository root), not an absolute path \
+                 and not one containing `..`.",
+                if path.is_absolute() {
+                    "absolute"
+                } else {
+                    "parent-directory-escaping"
+                }
+            ));
+        }
+    }
+
     if !lockfiles_unchanged {
         outcome.refused.push(
             "the base experiment did not reuse this workspace's installed dependencies: a \
@@ -160,7 +188,68 @@ pub fn link_dependencies(
         })?;
         outcome.linked.push(name.clone());
     }
+    // A preserved symlink tree can carry links whose targets were never in the
+    // copied directory. Measured: a plain pnpm farm (relative links into
+    // `.pnpm/`) survives a copy and resolves — but a layout that links outside
+    // `node_modules` (workspace `link:` entries, a virtual store placed
+    // elsewhere, links recorded absolute) copies faithfully and then dies in
+    // the base run with ERR_MODULE_NOT_FOUND, while the note still says the
+    // dependencies were reused. Checking after the copy converts that silent
+    // dead copy into a note that names the dangling target.
+    for name in &outcome.linked {
+        let target = worktree.join(name);
+        for dangling in dangling_links(&target, 8) {
+            outcome.refused.push(format!(
+                "`{name}` was copied into the base worktree, but {dangling} does not resolve \
+                 there, so the base control run may fail with ERR_MODULE_NOT_FOUND. The copy \
+                 preserves symlinks as symlinks, so a tree that links outside itself (a \
+                 workspace `link:` entry or a virtual store in another directory) points at \
+                 what it always pointed at. Add the directory it targets to \
+                 `verification.base_dependency_dirs`, or install a flat tree (for pnpm: \
+                 `pnpm install --node-linker=hoisted`)"
+            ));
+        }
+    }
     Ok(outcome)
+}
+
+/// The first few symlinks under `root` whose targets do not resolve.
+///
+/// Bounded twice: at most `max` findings (a broken tree can have thousands),
+/// and the walk stops once that many are found. Files are never followed, only
+/// links inspected, so the cost is the number of symlinks rather than the size
+/// of the store beside them.
+fn dangling_links(root: &Path, max: usize) -> Vec<String> {
+    let mut found = Vec::new();
+    if max == 0 || !root.is_dir() {
+        return found;
+    }
+    let mut stack = vec![root.to_owned()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            if found.len() >= max {
+                return found;
+            }
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                if std::fs::metadata(&path).is_err() {
+                    let link = std::fs::read_link(&path).unwrap_or_default();
+                    found.push(format!("`{}` -> `{}`", path.display(), link.display()));
+                }
+            } else if file_type.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    found
 }
 
 /// Whether any dependency lockfile is identical in both revisions.
@@ -321,6 +410,128 @@ mod tests {
             link_dependencies(workspace.path(), worktree.path(), &["vendor".into()], true).unwrap();
         assert!(outcome.linked.is_empty());
         assert!(worktree.path().join("vendor/base-only.txt").exists());
+    }
+
+    /// An absolute or escaping entry failed with a permission error naming a
+    /// path the user recognised and a root they did not. The contract — entries
+    /// are repo-relative and must resolve inside the worktree — was neither
+    /// documented nor enforced, so the error read as a filesystem problem
+    /// rather than a configuration one.
+    #[test]
+    fn an_absolute_entry_is_rejected_with_the_contract() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        let worktree = tempfile::TempDir::new().unwrap();
+        let error = link_dependencies(
+            workspace.path(),
+            worktree.path(),
+            &["/tmp/somewhere/node_modules".to_owned()],
+            true,
+        )
+        .expect_err("an absolute path must not be attempted");
+        let text = error.to_string();
+        assert!(
+            text.contains("relative") && text.contains("base_dependency_dirs"),
+            "the error must name the contract and the config key, got {text:?}"
+        );
+        assert!(!text.contains("Permission denied"), "got {text:?}");
+    }
+
+    #[test]
+    fn an_escaping_entry_is_rejected() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        let worktree = tempfile::TempDir::new().unwrap();
+        let error = link_dependencies(
+            workspace.path(),
+            worktree.path(),
+            &["../../elsewhere/node_modules".to_owned()],
+            true,
+        )
+        .expect_err("`..` must not be walked out of the worktree");
+        assert!(error.to_string().contains("relative"));
+    }
+
+    /// Relative entries still link, so the validation does not reject the form
+    /// the docs actually recommend.
+    /// A copied symlink tree can carry links that point outside it. The copy
+    /// preserves them faithfully — which is correct for a pnpm farm whose links
+    /// are relative into `.pnpm/`, and that case resolves after the copy — but a
+    /// tree that links outside itself copies "successfully" and then dies in the
+    /// base run with ERR_MODULE_NOT_FOUND while the receipt says the
+    /// dependencies were reused. The dead links must be named in a note.
+    #[test]
+    fn a_copy_with_dangling_links_is_reported_not_silent() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        let worktree = tempfile::TempDir::new().unwrap();
+        let deps = workspace.path().join("deps");
+        std::fs::create_dir_all(deps.join("pkg")).unwrap();
+        std::fs::write(deps.join("pkg/index.js"), "1").unwrap();
+        // A link that pointed somewhere real in the workspace but has no
+        // counterpart in the worktree after the copy.
+        std::os::unix::fs::symlink("../../../outside", deps.join("pkg/dead")).unwrap();
+
+        let outcome = link_dependencies(
+            workspace.path(),
+            worktree.path(),
+            &["deps".to_owned()],
+            true,
+        )
+        .expect("the copy itself succeeds");
+
+        assert_eq!(outcome.linked, vec!["deps".to_owned()], "the copy happened");
+        assert!(
+            !outcome.refused.is_empty(),
+            "a dead link must be reported, not swallowed: {:?}",
+            outcome.refused
+        );
+        let note = outcome.note().expect("a note describing the dead link");
+        assert!(
+            note.contains("base_dependency_dirs") && note.contains("pnpm"),
+            "the note must name the config key and the actionable fix, got {note:?}"
+        );
+    }
+
+    /// The common pnpm layout — relative links into `.pnpm/` inside the copied
+    /// tree — must NOT be reported as broken, or every pnpm user gets a false
+    /// alarm on a copy that works. Measured: that farm resolves after copy.
+    #[test]
+    fn a_farm_with_relative_links_is_not_reported_as_broken() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        let worktree = tempfile::TempDir::new().unwrap();
+        let farm = workspace.path().join("node_modules");
+        std::fs::create_dir_all(farm.join(".pnpm/lodash@1/node_modules/lodash")).unwrap();
+        std::fs::write(
+            farm.join(".pnpm/lodash@1/node_modules/lodash/index.js"),
+            "1",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(".pnpm/lodash@1/node_modules/lodash", farm.join("lodash"))
+            .unwrap();
+
+        let outcome = link_dependencies(
+            workspace.path(),
+            worktree.path(),
+            &["node_modules".to_owned()],
+            true,
+        )
+        .expect("the copy succeeds");
+        assert!(outcome.refused.is_empty(), "{:?}", outcome.refused);
+    }
+
+    #[test]
+    fn a_relative_entry_still_links() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        let worktree = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(workspace.path().join("vendor")).unwrap();
+        std::fs::write(workspace.path().join("vendor/pkg.json"), "x").unwrap();
+        let outcome = link_dependencies(
+            workspace.path(),
+            worktree.path(),
+            &["vendor".to_owned()],
+            true,
+        )
+        .expect("a relative entry must link");
+        assert_eq!(outcome.linked, vec!["vendor".to_owned()]);
+        assert!(worktree.path().join("vendor/pkg.json").is_file());
     }
 
     #[test]

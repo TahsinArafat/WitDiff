@@ -88,20 +88,18 @@ pub fn build_targeted_command(
     };
 
     let mut args = Vec::with_capacity(base.args.len() + targets.len() * 2);
+    // The subcommand must stay first: `cargo --test alpha test` is rejected by
+    // cargo itself (`error: unexpected argument '--test' found`, verified
+    // against the real binary), which would fail the run as a command error
+    // rather than narrow it. `unnarrowable_reason` guarantees `test` is
+    // `base.args[0]`, and inserting right after it keeps every cargo flag —
+    // and the `--` harness separator — in their original order behind it.
+    args.push(base.args[0].to_owned());
     for target in &targets {
         args.push("--test".to_owned());
         args.push(target.clone());
     }
-    // Everything after a bare `--` belongs to the test harness, not to cargo,
-    // so cargo-level flags must be inserted before it.
-    let separator = base.args.iter().position(|arg| arg == "--");
-    match separator {
-        Some(index) => {
-            args.extend(base.args[..index].iter().cloned());
-            args.extend(base.args[index..].iter().cloned());
-        }
-        None => args.extend(base.args.iter().cloned()),
-    }
+    args.extend(base.args[1..].iter().cloned());
 
     (
         CommandSpec {
@@ -200,7 +198,32 @@ mod tests {
         );
         assert_eq!(
             command.args,
-            vec!["--test", "alpha", "test", "--all-features"]
+            vec!["test", "--test", "alpha", "--all-features"],
+            "the targets must follow the subcommand; cargo rejects them before it"
+        );
+    }
+
+    #[test]
+    fn narrows_multiple_targets_behind_the_subcommand() {
+        let base = spec("cargo", &["test", "--all-features"]);
+        let (command, outcome) =
+            build_targeted_command(&base, &paths(&["tests/alpha.rs", "tests/beta.rs"]));
+        assert_eq!(
+            outcome,
+            SelectionOutcome::Targeted(vec!["alpha".to_owned(), "beta".to_owned()])
+        );
+        assert_eq!(
+            command.args,
+            vec![
+                "test",
+                "--test",
+                "alpha",
+                "--test",
+                "beta",
+                "--all-features"
+            ],
+            "each target pair must follow the subcommand, got {:?}",
+            command.args
         );
     }
 
@@ -211,7 +234,7 @@ mod tests {
         let separator = command.args.iter().position(|arg| arg == "--").unwrap();
         assert_eq!(
             command.args[..separator],
-            ["--test", "alpha", "test", "--quiet"],
+            ["test", "--test", "alpha", "--quiet"],
             "cargo flags must precede the harness separator, got {:?}",
             command.args
         );

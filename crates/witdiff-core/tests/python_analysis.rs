@@ -298,3 +298,84 @@ fn a_reassigned_name_is_not_resolved() {
         rules(&findings)
     );
 }
+
+/// `with pytest.raises(...)` and `with self.assertRaises(...)` check behaviour
+/// just as an assertion does, but they are not `assert` statements, so they
+/// were collected nowhere. A test built from one summarized with zero
+/// assertions AND zero guards, so deleting the raises-block produced a summary
+/// byte-identical to keeping it — and the test was separately reported as
+/// assertion-free, which is false, since it fails when nothing is raised.
+///
+/// Measured before this fix, with a real interpreter:
+///   `with pytest.raises(ValueError)`      -> assertions []  guards []
+///   `with self.assertRaises(ValueError)`  -> assertions []  guards []
+///   `assert parse(x) is None`             -> assertions [..]
+#[test]
+#[ignore = "end-to-end: spawns a Python interpreter; run with -- --ignored"]
+fn a_new_raises_block_test_is_not_assertion_free() {
+    // testshape.rs requires `existing.is_none()` for this rule, so the test
+    // name must not appear in the base at all — an empty base is the only way
+    // to get there from the end-to-end harness.
+    let head = "def test_x():\n    with pytest.raises(ValueError):\n        parse('bad')\n";
+    let findings = analyze(Some(""), head);
+    assert!(
+        !rules(&findings).contains(&"assertion_free_test"),
+        "a test that asserts an exception IS raised checks behaviour, got {:?}",
+        rules(&findings)
+    );
+
+    // And a genuinely new test with nothing to check is still reported, so
+    // the rule above is not simply disabled. A non-empty body is required: a
+    // `pass`-only body is already excluded by the `body_is_empty` condition.
+    let findings = analyze(Some(""), "def test_other():\n    value = compute()\n");
+    assert!(
+        rules(&findings).contains(&"assertion_free_test"),
+        "a new test with no check at all must still be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// And removing the guard is reported, which is the whole point of the
+/// `guards` field the shared engine already reads.
+#[test]
+#[ignore = "end-to-end: spawns a Python interpreter; run with -- --ignored"]
+fn removing_a_raises_block_is_reported() {
+    let base = "def test_x():\n    with pytest.raises(ValueError):\n        parse('bad')\n";
+    let head = "def test_x():\n    parse('bad')\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        !findings.is_empty(),
+        "a test that no longer expects the exception must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// `if not ok: raise AssertionError` reports failure with no assertion
+/// statement in sight. testshape.rs:57 names it as a case that must be seen.
+#[test]
+#[ignore = "end-to-end: spawns a Python interpreter; run with -- --ignored"]
+fn an_if_raise_assertion_error_is_a_guard() {
+    let base = "def test_x():\n    if not check():\n        raise AssertionError('bad')\n";
+    let head = "def test_x():\n    check()\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        !findings.is_empty(),
+        "removing a failure guard must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// A plain `raise ValueError` is the code under test, not a check, so it must
+/// not be counted as a guard — or every error-handling test would look guarded.
+#[test]
+#[ignore = "end-to-end: spawns a Python interpreter; run with -- --ignored"]
+fn raising_a_plain_exception_is_not_a_guard() {
+    let base = "def test_x():\n    parse('bad')\n    raise ValueError('expected')\n";
+    let head = "def test_x():\n    parse('bad')\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        !rules(&findings).contains(&"removed_error_check"),
+        "raising under test is not a failure guard, got {:?}",
+        rules(&findings)
+    );
+}

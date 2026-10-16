@@ -29,6 +29,7 @@ Consumers should prefer enum/status fields over parsing notes or stdout.
 | --- | --- | --- |
 | `proven` | The changed tests distinguish the two revisions | Nothing |
 | `proven_with_integrity_warnings` | Proven, but the change weakened its own tests | Read the findings |
+| `stale_evidence` | Red/green was observed, but the workspace moved during the run | Commit or ignore build output, then re-run |
 | `base_also_passes` | The tests pass on the base too, so they pin nothing | Strengthen the assertion |
 | `base_control_failed` | The pristine base does not pass the command | Fix or re-target the base |
 | `base_control_timed_out` | The base control exceeded its timeout | Raise `timeout_secs` or fix the hang |
@@ -38,6 +39,12 @@ Consumers should prefer enum/status fields over parsing notes or stdout.
 | `partial_transplant` | Some changed tests could not be transplanted | Read `notes` for which |
 | `base_experiment_timed_out` | The base+test run did not terminate | Fix the hang |
 | `unrecognized_failure_kind` | The failure is not one the framework's classifier knows | Check `framework`, or the runner's output vocabulary |
+
+WitDiff reports this as *not read* rather than diagnosing the cause. It knows
+the run failed and that its classifier did not recognise the failure; it does not
+know which of several possible causes produced that, so it does not name one. The
+`next` line follows the `reason` rather than the `status`, because several causes
+share `not_verified` and only one of them applies here.
 | `head_tests_failed` | The command already fails on this workspace | Fix that first |
 | `test_command_unavailable` | The command could not be started | Install the toolchain, or configure `base_dependency_dirs` |
 | `no_dedicated_tests_changed` | No test file changed, so nothing was attempted | Not a failure; gate with `--fail-on-no-changed-tests` |
@@ -141,7 +148,12 @@ requires the public key, which is the operator's to supply.
 
 If signing fails — an unreadable key, no digest — the receipt is still written,
 unsigned, and a note says so. An unsigned receipt is a fact, not a failure. Set
-`signing_failure_exit_code = 2` to make an unsigned receipt fail a CI gate.
+`signing_failure_exit_code = 2` to make an unsigned receipt fail a CI gate; the
+default is `1`, a tool error. The exit code applies only when a `signing_key`
+was configured, so a repository that never signs is unaffected. The receipt
+records `signing_requested: true` in that case, which is what distinguishes
+"unsigned because a key was asked for and the signing failed" from "signing was
+never requested".
 
 Signing and verification are pure Rust (`ed25519-dalek`), so no JavaScript
 runtime is required for either. Keys are raw 32-byte files: a seed to sign, a

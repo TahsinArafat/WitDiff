@@ -331,6 +331,60 @@ fn buggy_base_with_fixed_workspace_and_new_test_is_verified() {
     );
 }
 
+/// A run whose workspace moved underneath it is not proven, even though the
+/// red/green experiment succeeded: the observation cannot be attributed to
+/// the code under review. The machine `reason` must move with the status —
+/// a `not_verified` receipt still carrying `proven` would tell a gate
+/// reading the token that a stale run was a proof.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn stale_evidence_downgrades_the_reason_as_well_as_the_status() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", buggy_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+
+    fixture.write("src/lib.rs", fixed_lib());
+    // The regression test mutates the workspace during the head run, the way a
+    // real test that regenerates a fixture file or rewrites a lockfile does.
+    fixture.write(
+        "tests/regression.rs",
+        "\
+#[test]
+fn even_numbers_are_reported_even() {
+    assert!(witdiff_fixture::is_even(2));
+    assert!(!witdiff_fixture::is_even(3));
+    std::fs::write(\"evidence_moved.txt\", \"moved\").expect(\"marker\");
+}
+",
+    );
+
+    let receipt = fixture.verify(&fixture_config());
+
+    assert!(
+        receipt.red_green_proven,
+        "the experiment itself must have succeeded; notes={:?}",
+        receipt.notes
+    );
+    assert!(
+        !receipt.evidence_fresh,
+        "the marker must make the evidence stale"
+    );
+    assert_eq!(
+        receipt.status,
+        VerificationStatus::NotVerified,
+        "stale evidence must not verify; notes={:?}",
+        receipt.notes
+    );
+    assert_eq!(
+        receipt.reason,
+        witdiff_core::Reason::StaleEvidence,
+        "the machine reason must move with the status, not keep claiming `proven`"
+    );
+}
+
 #[test]
 #[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
 fn test_that_also_passes_on_base_is_not_verified() {
@@ -861,6 +915,121 @@ fn missing_test_program_does_not_leak_worktree() {
     );
 }
 
+/// Retention must also survive an ERROR raised part-way through the
+/// experiment — a transplant that will not apply, a runner that cannot spawn.
+///
+/// This is the case the retain placement alone is responsible for. The old
+/// code retained inside the `Ok` arm of the result match, so an `Err` from the
+/// experiment returned before it, dropped the guard, and removed the worktree.
+/// The `TempDir` half of the fix does not help here: with `--keep-worktree` the
+/// directory outlives the run, and it was the guard's `Drop` that took the
+/// worktree with it. The note is not even written on this path, so the receipt
+/// gave no hint that `--keep-worktree` had been asked for at all.
+#[test]
+fn a_kept_worktree_survives_an_error_part_way_through() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", buggy_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+        ("tests/regression.rs", "// placeholder committed at base\n"),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+
+    // The workspace must differ from base, or the transplant patch is empty and
+    // there is nothing that can fail.
+    fixture.write("tests/regression.rs", "// modified in the workspace\n");
+
+    let repo = fixture.repo();
+    let tmp = TempDir::new().expect("temp");
+    let worktree = tmp.path().join("base");
+
+    // Retain at the same point `verify_repository` now does: right after the
+    // worktree exists, before anything that can fail.
+    let mut guard = WorktreeGuard::create(&repo, &worktree, "main").expect("worktree creation");
+    let retained = guard.retain();
+
+    // Make the worktree diverge, then apply a patch computed against the
+    // pristine base. Git must reject it, which is the error path.
+    fs::write(worktree.join("tests/regression.rs"), "// diverged\n").expect("diverging write");
+    let patch = repo
+        .diff_for_paths("main", &["tests/regression.rs".to_owned()], 3)
+        .expect("computing the transplant patch");
+    assert!(
+        !patch.is_empty(),
+        "fixture must produce a non-empty transplant patch"
+    );
+    let result = repo.apply_patch(&worktree, &patch);
+
+    assert!(
+        result.is_err(),
+        "a transplant onto a diverged worktree must fail, or this test proves nothing"
+    );
+    assert!(
+        retained.is_dir(),
+        "a retained worktree must survive an error part-way through, but {} is gone",
+        retained.display()
+    );
+}
+
+/// `--keep-worktree` must survive a run that did NOT succeed, because a failed
+/// run is exactly when an operator wants the tree.
+///
+/// Measured: retention sat in the `Ok` arm of the experiment result, and a base
+/// control failure returns before that arm is ever reached. The guard was
+/// dropped, the worktree removed, and -- when the note had already been pushed
+/// -- the receipt named a path that did not exist. The note and the filesystem
+/// disagreed, and nothing looked.
+#[test]
+#[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
+fn keep_worktree_survives_a_failed_run() {
+    let fixture = Fixture::new(&[("src/lib.rs", buggy_lib())]);
+    fixture.warm_lockfile();
+    fixture.commit_base("buggy base");
+
+    // The BASE suite fails, so the base control run fails. The head must still
+    // pass, or verification returns as `head_failed` before the worktree is
+    // ever created and this test would prove nothing.
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+    fixture.commit_base("base whose own suite fails");
+    fixture.write("src/lib.rs", fixed_lib());
+    // A changed test file, so verification does not stop at no_changed_tests.
+    fixture.write("tests/extra.rs", UNRELATED_TEST);
+
+    let receipt = verify_repository(
+        &fixture.repo(),
+        &fixture_config(),
+        VerifyOptions {
+            keep_worktree: true,
+            ..VerifyOptions::default()
+        },
+    )
+    .expect("a failing base control is reported in a receipt, not as an error");
+
+    assert_ne!(
+        receipt.status,
+        VerificationStatus::Verified,
+        "this fixture is meant to fail; if it verifies, the test proves nothing"
+    );
+    let note = receipt
+        .notes
+        .iter()
+        .find(|n| n.contains("base worktree retained at"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the worktree must still be reported as kept: {:?}",
+                receipt.notes
+            )
+        });
+    let path = note
+        .rsplit_once(' ')
+        .expect("the note must end with a path")
+        .1;
+    assert!(
+        std::path::Path::new(path).is_dir(),
+        "a kept worktree must survive a failed run, but the named path is gone: {path}"
+    );
+}
+
 #[test]
 #[ignore = "end-to-end: spawns real cargo builds; run with -- --ignored"]
 fn keep_worktree_retains_the_base_tree_under_the_temp_directory() {
@@ -885,13 +1054,24 @@ fn keep_worktree_retains_the_base_tree_under_the_temp_directory() {
     .expect("verification should complete");
 
     assert_eq!(receipt.status, VerificationStatus::Verified);
+
+    // The path named in the note must be a directory that actually exists.
+    // Checking only that the note appeared is what let this ship: retention
+    // ran in the `Ok` arm of the experiment result, and a run that reached any
+    // other path printed the note and then dropped the guard, which removed the
+    // worktree. The note and the filesystem disagreed, and nothing looked.
+    let note = receipt
+        .notes
+        .iter()
+        .find(|n| n.contains("base worktree retained at"))
+        .expect("retention must be reported with its exact path");
+    let path = note
+        .rsplit_once(' ')
+        .expect("the note must end with a path")
+        .1;
     assert!(
-        receipt
-            .notes
-            .iter()
-            .any(|n| n.contains("base worktree retained at")),
-        "retention must be reported with its exact path, got {:?}",
-        receipt.notes
+        std::path::Path::new(path).is_dir(),
+        "the retained worktree was named but does not exist: {path}"
     );
 }
 
@@ -938,7 +1118,7 @@ fn worktree_guard_retain_leaves_the_registration_in_place() {
     let tmp = TempDir::new().expect("temp");
     let path = tmp.path().join("base");
 
-    let guard = WorktreeGuard::create(&repo, &path, "HEAD").expect("worktree creation");
+    let mut guard = WorktreeGuard::create(&repo, &path, "HEAD").expect("worktree creation");
     let retained = guard.retain();
     assert_eq!(retained, path);
 
@@ -2156,12 +2336,45 @@ fn a_missing_key_is_reported_rather_than_ignored() {
     let receipt = fixture.verify(&config);
     assert!(receipt.signature.is_none());
     assert!(
+        receipt.signing_requested,
+        "a requested signature that failed must be distinguishable from never having asked"
+    );
+    assert!(
         receipt
             .notes
             .iter()
             .any(|note| note.contains("could not be signed")),
         "the operator must be told the receipt is unsigned, got {:?}",
         receipt.notes
+    );
+}
+
+/// Signing is opt-in, so a run with no key must not claim a signature was
+/// requested — otherwise `signing_failure_exit_code` would fire on every
+/// repository that never signs.
+#[test]
+#[ignore = "end-to-end: spawns real commands; run with -- --ignored"]
+fn an_unrequested_signature_is_not_reported_as_one() {
+    let fixture = Fixture::new(&[
+        ("src/lib.rs", fixed_lib()),
+        ("tests/existing.rs", UNRELATED_TEST),
+    ]);
+    fixture.warm_lockfile();
+    fixture.commit_base("base");
+    fixture.write("src/lib.rs", fixed_lib());
+    fixture.write("tests/regression.rs", CREDIBLE_REGRESSION_TEST);
+
+    let receipt = fixture.verify(&fixture_config());
+    assert!(receipt.signature.is_none());
+    assert!(
+        !receipt.signing_requested,
+        "no key configured means signing was never requested"
+    );
+    // Additive in v1: the field is omitted, not serialized as `false`.
+    let json = serde_json::to_string(&receipt).expect("serialize");
+    assert!(
+        !json.contains("signing_requested"),
+        "an unrequested signature must not appear in the receipt: {json}"
     );
 }
 

@@ -96,6 +96,54 @@ impl Repo {
     }
 }
 
+/// WitDiff's own config file is neither test code nor production code, and a
+/// user who ran `witdiff init` to learn the schema saw that file reported as a
+/// production change — the tool classifying its own configuration as part of
+/// the change under review.
+#[test]
+fn the_tool_ignores_its_own_config_file_in_classification() {
+    let repo = Repo::new();
+    fs::write(
+        repo.path.join("witdiff.toml"),
+        "[project]\nlanguage = \"rust\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path.join("src/lib.rs"),
+        "pub fn answer() -> u8 { 42 }\n",
+    )
+    .unwrap();
+
+    let report = repo.inspect();
+    assert!(
+        !report
+            .changed_production_files
+            .iter()
+            .any(|p| p == "witdiff.toml"),
+        "the tool must not classify its own config as production code: {:?}",
+        report.changed_production_files
+    );
+    // The real production change is still reported, so the exclusion is
+    // precise rather than a blanket silence.
+    assert!(
+        report
+            .changed_production_files
+            .iter()
+            .any(|p| p == "src/lib.rs"),
+        "a genuine production change must still be listed: {:?}",
+        report.changed_production_files
+    );
+    // And the config change is not hidden entirely — it remains in the full
+    // list, because provenance and provenance-only consumers still need it.
+    assert!(
+        report
+            .changed_files
+            .iter()
+            .any(|p| p.path == "witdiff.toml"),
+        "the config change must stay visible in changed_files"
+    );
+}
+
 /// Git C-quotes any path containing non-ASCII or special bytes unless the
 /// caller asks for NUL-delimited output. Reading paths with the default
 /// encoding yields `"tests/caf\303\251.rs"`, a string that matches no glob and

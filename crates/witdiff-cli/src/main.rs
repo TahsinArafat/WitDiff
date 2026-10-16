@@ -35,6 +35,15 @@ enum Commands {
     Init {
         #[arg(long)]
         force: bool,
+        /// Print the configuration WitDiff would write, without writing it and
+        /// without requiring a git repository.
+        ///
+        /// There was no way to read the schema without creating a file: `init`
+        /// refused outside a git repo, so a user inspecting WitDiff's options
+        /// had to run it inside the target repository — and then the file it
+        /// created showed up in their next `witdiff inspect`.
+        #[arg(long)]
+        print: bool,
     },
     /// Check local prerequisites and repository configuration.
     Doctor,
@@ -58,10 +67,25 @@ enum Commands {
         #[arg(long)]
         strict: bool,
         /// Keep the temporary base worktree for investigation.
+        ///
+        /// The worktree is retained in every outcome, including a failed base
+        /// control and an error part-way through the experiment, because those
+        /// are exactly when it is wanted. Nothing else cleans it up: remove it
+        /// with `git worktree remove <path>`.
         #[arg(long)]
         keep_worktree: bool,
         /// Write the JSON receipt to a custom path.
-        #[arg(long)]
+        ///
+        /// Conflicts with `--no-write`, which is the whole meaning of that
+        /// flag. Passing both used to be accepted and then silently did
+        /// nothing: the receipt-writing block is guarded by `if !no_write`, and
+        /// this path is passed *into* the call that block guards, so `--output`
+        /// vanished along with the write and no file appeared. Measured: exit 2,
+        /// no file, and nothing on stderr to explain it. Rejecting the pair at
+        /// startup is the cheapest correct behaviour, because the user asked for
+        /// a file and silently getting none is the one outcome they cannot act
+        /// on.
+        #[arg(long, conflicts_with = "no_write")]
         output: Option<PathBuf>,
         /// Do not persist a receipt file.
         #[arg(long)]
@@ -132,7 +156,7 @@ fn run() -> Result<ExitCode> {
     };
 
     match cli.command {
-        Commands::Init { force } => init(&start, force),
+        Commands::Init { force, print } => init(&start, force, print),
         Commands::Doctor => doctor(&start),
         Commands::Inspect { base, json } => inspect(&start, base.as_deref(), json),
         Commands::Verify {
@@ -169,7 +193,15 @@ fn run() -> Result<ExitCode> {
     }
 }
 
-fn init(start: &Path, force: bool) -> Result<ExitCode> {
+fn init(start: &Path, force: bool, print_only: bool) -> Result<ExitCode> {
+    // Reading the schema needs neither a repository nor a file. Printing comes
+    // first so `witdiff init --print` works outside git, which is exactly the
+    // situation the flag exists for.
+    if print_only {
+        let config = Config::inferred_for(start);
+        print!("{}", toml::to_string_pretty(&config)?);
+        return Ok(ExitCode::SUCCESS);
+    }
     let repo = GitRepo::discover(start)?;
     let path = repo.root().join("witdiff.toml");
     if path.exists() && !force {
@@ -199,6 +231,9 @@ fn init(start: &Path, force: bool) -> Result<ExitCode> {
 fn doctor(start: &Path) -> Result<ExitCode> {
     let repo = GitRepo::discover(start)?;
     let config = Config::load(repo.root())?;
+    // Whether the classifier was stated or inferred, so the line below can say
+    // which. `Config::load` infers when witdiff.toml is absent.
+    let declared = repo.root().join("witdiff.toml").exists();
     let git_ok = command_exists("git", &["--version"]);
 
     // Check the binary this project actually uses, not `cargo`. A Python or Go
@@ -220,10 +255,13 @@ fn doctor(start: &Path) -> Result<ExitCode> {
     println!("  git        : {}", mark(git_ok));
     println!(
         "  config     : {}",
-        if repo.root().join("witdiff.toml").exists() {
+        if declared {
             "configured"
         } else {
-            "using defaults"
+            // "using defaults" implied the Rust defaults, which is what
+            // actually happened before `Config::load` learned to infer. Now
+            // nothing is defaulted: the values were read off the repository.
+            "inferred from the repository"
         }
     );
     println!(
@@ -232,6 +270,17 @@ fn doctor(start: &Path) -> Result<ExitCode> {
         program.as_deref().unwrap_or("(none configured)")
     );
     match &framework {
+        // Distinguish a value WitDiff inferred from one the repository states.
+        // "ok" next to a name read as "this is the right classifier, confirmed",
+        // and it was printed for a guess: `Config::load` returned the Rust
+        // defaults whenever witdiff.toml was absent, so a node:test project
+        // reported `framework : ok (cargo)`. The check that this line performs
+        // — does the name parse — passes on a wrong value just as happily as a
+        // right one, so `ok` was claiming more than was checked. It now says
+        // where the value came from.
+        Ok(framework) if !declared => {
+            println!("  framework  : inferred ({})", framework.as_str());
+        }
         Ok(framework) => println!("  framework  : ok ({})", framework.as_str()),
         Err(error) => println!("  framework  : failed ({error})"),
     }
@@ -339,20 +388,27 @@ fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
     // ran in `effective_test_command`.
     let mut command_override = None;
     if install_toolchains {
+        // With --json the stdout stream is machine-stable, so the probe
+        // narration goes to stderr rather than corrupting the JSON.
+        macro_rules! probe {
+            ($($arg:tt)*) => {
+                if json { eprintln!($($arg)*) } else { println!($($arg)*) }
+            };
+        }
         let configured_program = config.verification.test_command.first().cloned();
         if let Some(program) = configured_program {
             if command_exists(&program, &["--version"]) {
-                println!("  toolchain        : `{program}` is present");
+                probe!("  toolchain        : `{program}` is present");
             } else {
-                println!(
+                probe!(
                     "  toolchain        : `{program}` is missing; looking for a project installer"
                 );
                 match toolchain::find_installer(repo.root(), &program) {
                     Some(installer) => {
-                        println!("  toolchain        : running {}", installer.description);
+                        probe!("  toolchain        : running {}", installer.description);
                         match toolchain::run_installer(&installer) {
                             Ok(()) => {
-                                println!(
+                                probe!(
                                     "  toolchain        : wrapper succeeded; using it for the test command"
                                 );
                                 command_override = installer.command_line();
@@ -360,11 +416,11 @@ fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
                             Err(error) => {
                                 // A failed install is reported and verification
                                 // continues: it may still produce findings.
-                                println!("  toolchain        : installation failed ({error:#})");
+                                probe!("  toolchain        : installation failed ({error:#})");
                             }
                         }
                     }
-                    None => println!(
+                    None => probe!(
                         "  toolchain        : no project installer for `{program}`; install it manually"
                     ),
                 }
@@ -456,6 +512,20 @@ fn verify(start: &Path, args: VerifyArgs) -> Result<ExitCode> {
             println!("  gate             : {reason}");
         }
     }
+
+    // A signing failure is not a verification result, so it never changes the
+    // status above — but an operator who asked for signatures and did not get
+    // one wants the gate to fail, which is what `signing_failure_exit_code`
+    // is for. It applies only when signing was actually requested, so a
+    // repository that never signs is unaffected.
+    if receipt.signing_requested && receipt.signature.is_none() {
+        let code = config.verification.signing_failure_exit_code;
+        eprintln!(
+            "error: signing was requested but the receipt is unsigned; exiting with configured signing_failure_exit_code = {code}"
+        );
+        return Ok(ExitCode::from(code));
+    }
+
     Ok(if gate.passes() {
         ExitCode::SUCCESS
     } else {
@@ -484,8 +554,10 @@ fn escape_github_property(text: &str) -> String {
 
 /// Emit GitHub Actions annotations for a receipt.
 ///
-/// Written to stdout as workflow commands so the workflow file needs no logic
-/// and no string escaping of its own (ADR-0013).
+/// Written to stderr as workflow commands so the workflow file needs no logic
+/// and no string escaping of its own (ADR-0013). Stderr keeps stdout
+/// machine-stable under `--json`; GitHub parses workflow commands from the
+/// step log, which merges both streams.
 fn print_github_annotations(receipt: &witdiff_core::Receipt, policy: &GatePolicy) {
     let gate = receipt.gate(policy);
     let summary = format!(
@@ -501,15 +573,15 @@ fn print_github_annotations(receipt: &witdiff_core::Receipt, policy: &GatePolicy
 
     match gate {
         witdiff_core::model::GateOutcome::Failed => {
-            println!("::error::{}", escape_github_command(&summary));
+            eprintln!("::error::{}", escape_github_command(&summary));
         }
         witdiff_core::model::GateOutcome::NothingToProve => {
             // A notice, not a warning: the receipt is correct, there was simply
             // nothing to prove.
-            println!("::notice::{}", escape_github_command(&summary));
+            eprintln!("::notice::{}", escape_github_command(&summary));
         }
         witdiff_core::model::GateOutcome::Satisfied => {
-            println!("::notice::{}", escape_github_command(&summary));
+            eprintln!("::notice::{}", escape_github_command(&summary));
         }
     }
 
@@ -519,7 +591,7 @@ fn print_github_annotations(receipt: &witdiff_core::Receipt, policy: &GatePolicy
             witdiff_core::Severity::Warning => "warning",
             witdiff_core::Severity::Info => "notice",
         };
-        println!(
+        eprintln!(
             "::{level} file={},line={},title={}::{}",
             escape_github_property(&finding.path),
             finding.line,
@@ -534,7 +606,7 @@ fn print_github_annotations(receipt: &witdiff_core::Receipt, policy: &GatePolicy
             .iter()
             .filter(|result| result.outcome == witdiff_core::model::MutantOutcome::Survived)
         {
-            println!(
+            eprintln!(
                 "::warning file={},line={},title={}::{}",
                 escape_github_property(&result.path),
                 result.line,
@@ -550,7 +622,7 @@ fn print_github_annotations(receipt: &witdiff_core::Receipt, policy: &GatePolicy
     }
 
     for note in &receipt.notes {
-        println!("::notice::{}", escape_github_command(note));
+        eprintln!("::notice::{}", escape_github_command(note));
     }
 }
 
@@ -612,15 +684,27 @@ fn uninstall(keep_integrations: bool, dry_run: bool) -> Result<ExitCode> {
         for path in &integration {
             if dry_run {
                 println!("  would remove     : {}", path.display());
+                removed += 1;
+                continue;
+            }
+            // Integrations are both directories and single files (the Cursor
+            // rule is `~/.cursor/rules/witdiff.mdc`); `remove_dir_all` on a
+            // file fails with ENOTDIR, which would leave the file behind while
+            // reporting the whole uninstall as failed.
+            let removal = if path.is_dir() {
+                fs::remove_dir_all(path)
             } else {
-                match fs::remove_dir_all(path) {
-                    Ok(()) => println!("  removed          : {}", path.display()),
-                    Err(error) => {
-                        problems.push(format!("could not remove {}: {error}", path.display()))
-                    }
+                fs::remove_file(path)
+            };
+            match removal {
+                Ok(()) => {
+                    println!("  removed          : {}", path.display());
+                    removed += 1;
+                }
+                Err(error) => {
+                    problems.push(format!("could not remove {}: {error}", path.display()))
                 }
             }
-            removed += 1;
         }
     }
 
@@ -974,7 +1058,7 @@ fn print_receipt_summary(receipt: &Receipt) {
     }
     // Printed last and prefixed so it is not mistaken for a finding: the
     // diagnosis above says what happened, this says what to do about it.
-    println!("  next             : {}", receipt.status.remediation());
+    println!("  next             : {}", receipt.remediation());
 }
 
 fn pass_fail(success: bool) -> &'static str {

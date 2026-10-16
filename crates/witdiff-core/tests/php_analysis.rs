@@ -321,3 +321,193 @@ fn deleting_an_exception_expectation_is_reported() {
         rules(&findings)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Polarity, visibility, and the skipped flag
+//
+// Each of these was measured against the real PHP interpreter before this
+// section existed. Every one of them had the same shape: the red/green proof
+// passed, because the experiment genuinely did distinguish two revisions,
+// while the test had quietly stopped constraining anything.
+// ---------------------------------------------------------------------------
+
+/// PHPUnit 10 replaced `@test` with the `#[Test]` attribute. A class using it
+/// summarized with ZERO functions, so a deleted attribute-style test reached
+/// `verified` with no integrity finding at all.
+#[test]
+fn a_test_attribute_is_read_as_a_test() {
+    let source = "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\nclass ParityTest extends TestCase {\n    #[Test]\n    public function even_numbers_are_even(): void {\n        $this->assertEquals(0, 2 % 2);\n    }\n}\n";
+    let findings = analyze(None, source);
+    let _ = findings;
+    // Deleting the attribute-style test must be reported as a removed test.
+    let head = "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\nclass ParityTest extends TestCase {\n}\n";
+    let findings = analyze(Some(source), head);
+    assert!(
+        rules(&findings).contains(&"removed_test"),
+        "deleting a #[Test] method must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// `notToBe` renders an `Eq`, identical to `toBe`. Inverting a Pest expectation
+/// — the change that makes a passing test assert failure — reported nothing.
+#[test]
+fn an_inverted_pest_expectation_is_reported() {
+    let base = "<?php\ntest('adds', function () {\n    expect($this->add(2, 3))->toBe(5);\n});\n";
+    let head =
+        "<?php\ntest('adds', function () {\n    expect($this->add(2, 3))->notToBe(5);\n});\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        !findings.is_empty(),
+        "inverting a Pest expectation must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// `->not->toBe(5)` rendered as the bare subject: polarity AND value both lost.
+#[test]
+fn a_pest_property_negation_is_reported() {
+    let base = "<?php\ntest('adds', function () {\n    expect($this->add(2, 3))->toBe(5);\n});\n";
+    let head =
+        "<?php\ntest('adds', function () {\n    expect($this->add(2, 3))->not->toBe(5);\n});\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        !findings.is_empty(),
+        "inverting a Pest expectation through `not` must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// A dataset changes what runs but not whether it is checked.
+#[test]
+fn a_pest_dataset_is_not_read_as_a_skip() {
+    let base = "<?php\ntest('adds', function (int $a, int $b) {\n    expect($this->add($a, $b))->toBe(5);\n});\n";
+    let head = "<?php\ntest('adds', function (int $a, int $b) {\n    expect($this->add($a, $b))->toBe(5);\n})->with([1, 2]);\n";
+    let findings = analyze(Some(base), head);
+    assert!(
+        !rules(&findings).contains(&"skipped_test"),
+        "a dataset must not be read as a skip, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// Both skip forms reported `skipped: false`, so `skipped_test` could never
+/// fire in PHP. `markTestSkipped` was additionally rendered as an assertion
+/// whose text was the skip message.
+#[test]
+fn a_marked_skipped_test_is_reported_as_skipped() {
+    // The rule is direction-sensitive by design: ADDING a skip weakens a test,
+    // removing a pre-existing one does not. What matters here is that the
+    // marker is read at all — `skipped` was hardcoded `false`, so the rule
+    // could never fire for PHP.
+    let active = phpunit_class(
+        "    public function testThing(): void {\n        $this->assertEquals(1, 1);\n    }",
+    );
+    let skipped = phpunit_class(
+        "    public function testThing(): void {\n        $this->markTestSkipped('later');\n        $this->assertEquals(1, 1);\n    }",
+    );
+    let findings = analyze(Some(&active), &skipped);
+    assert!(
+        rules(&findings).contains(&"skipped_test"),
+        "adding a skip marker must be reported, got {:?}",
+        rules(&findings)
+    );
+
+    // And the marker is not itself counted as an assertion: a test whose only
+    // call is a skip asserted nothing, and rendering it as asserting its own
+    // message made the skip invisible from the other direction.
+    let only_skip = phpunit_class(
+        "    public function testThing(): void {\n        $this->markTestSkipped('later');\n    }",
+    );
+    let with_assertion = phpunit_class(
+        "    public function testThing(): void {\n        $this->assertEquals(1, 1);\n    }",
+    );
+    let findings = analyze(Some(&only_skip), &with_assertion);
+    assert!(
+        !rules(&findings).contains(&"trivial_assertion"),
+        "the skip message must not be read as an assertion, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// `assertTrue`/`assertFalse` rendered identically, so a polarity inversion
+/// that makes the test pass for the wrong reason was invisible.
+#[test]
+fn inverting_a_predicate_assertion_is_reported() {
+    for (from, to) in [
+        ("assertTrue", "assertFalse"),
+        ("assertNull", "assertNotNull"),
+        ("assertEmpty", "assertNotEmpty"),
+    ] {
+        let base = phpunit_class(&format!(
+            "    public function testThing(): void {{\n        $this->{from}($value);\n    }}"
+        ));
+        let head = phpunit_class(&format!(
+            "    public function testThing(): void {{\n        $this->{to}($value);\n    }}"
+        ));
+        let findings = analyze(Some(&base), &head);
+        assert!(
+            !findings.is_empty(),
+            "inverting {from} to {to} must be reported, got {:?}",
+            rules(&findings)
+        );
+    }
+}
+
+/// Predicate assertions dropped the subject, so a change of subject was
+/// invisible. Swapping one check for another is exactly the substitution a
+/// reviewer must see.
+#[test]
+fn changing_the_subject_of_a_predicate_is_reported() {
+    let base = phpunit_class(
+        "    public function testThing(): void {\n        $this->assertNotEmpty($fromList());\n    }",
+    );
+    let head = phpunit_class(
+        "    public function testThing(): void {\n        $this->assertNotEmpty($toList());\n    }",
+    );
+    let findings = analyze(Some(&base), &head);
+    assert!(
+        !findings.is_empty(),
+        "changing the checked subject must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// Binary assertions whose operands are not the canonical pair — ordering,
+/// containment, membership, type — rendered only one argument, so flipping the
+/// operand that decides pass/fail reported nothing.
+#[test]
+fn flipping_an_operand_of_an_ordered_assertion_is_reported() {
+    // assertGreaterThan(expected, actual): base passes, head fails.
+    let base = phpunit_class(
+        "    public function testThing(): void {\n        $this->assertGreaterThan(3, $got);\n    }",
+    );
+    let head = phpunit_class(
+        "    public function testThing(): void {\n        $this->assertGreaterThan(3, 2);\n    }",
+    );
+    let findings = analyze(Some(&base), &head);
+    assert!(
+        !findings.is_empty(),
+        "replacing a subject with a literal must be reported, got {:?}",
+        rules(&findings)
+    );
+}
+
+/// A private helper whose name merely contains "test" was treated as a test,
+/// so renaming it reported a high-severity removal and failed the gate.
+#[test]
+fn a_helper_whose_name_merely_contains_test_is_not_a_test() {
+    let source = phpunit_class(
+        "    private function buildTestSubject(): array { return [1, 2]; }\n    public function testThing(): void { $this->assertCount(2, $this->buildTestSubject()); }",
+    );
+    let head = phpunit_class(
+        "    private function buildSubject(): array { return [1, 2]; }\n    public function testThing(): void { $this->assertCount(2, $this->buildSubject()); }",
+    );
+    let findings = analyze(Some(&source), &head);
+    assert!(
+        !rules(&findings).contains(&"removed_assertion")
+            && !rules(&findings).contains(&"removed_test"),
+        "renaming a private helper must not look like removing a test, got {:?}",
+        rules(&findings)
+    );
+}

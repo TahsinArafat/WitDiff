@@ -25,6 +25,11 @@ cd your-project
 witdiff init
 ```
 
+To read what it would write without writing anything — and without needing a
+git repository — `witdiff init --print` prints the inferred configuration to
+stdout.
+
+
 `init` detects the project type from its manifest and writes a matching
 configuration: `cargo test` for Rust, `python3 -m pytest` for Python, `go test
 ./...` for Go, `npm test` for JavaScript, `mvn test` or `gradle test` for Java,

@@ -36,10 +36,6 @@ pub struct ChangedFile {
     pub previous_is_test: bool,
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InspectReport {
     pub repo_root: String,
@@ -134,6 +130,10 @@ fn one_run() -> usize {
     1
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationStatus {
@@ -170,6 +170,10 @@ pub enum Reason {
     Proven,
     /// Proven, but the change weakened its own tests.
     ProvenWithIntegrityWarnings,
+    /// Red/green behaviour was observed, but the workspace changed while the
+    /// experiment was running, so the observation cannot be attributed to the
+    /// code under review. The remedy is to re-run on a still workspace.
+    StaleEvidence,
     /// The changed tests also pass on the base revision, so they distinguish
     /// nothing. The remedy is a stronger assertion.
     BaseAlsoPasses,
@@ -215,6 +219,7 @@ impl Reason {
         match self {
             Self::Proven => "proven",
             Self::ProvenWithIntegrityWarnings => "proven_with_integrity_warnings",
+            Self::StaleEvidence => "stale_evidence",
             Self::BaseAlsoPasses => "base_also_passes",
             Self::BaseControlFailed => "base_control_failed",
             Self::BaseControlTimedOut => "base_control_timed_out",
@@ -240,6 +245,41 @@ impl Reason {
     /// reported as fixable but names the configuration as the likely cause.
     pub fn is_actionable_by_author(self) -> bool {
         matches!(self, Self::BaseAlsoPasses | Self::NoDedicatedTestsChanged)
+    }
+
+    /// What the reader should do about *this* cause, or `None` when the status's
+    /// own text is the right advice.
+    ///
+    /// Several causes share the `not_verified` status, so status-level text can
+    /// only be a generic guess. Measured: a base-control failure whose advice was
+    /// "add an assertion that fails without the change" — advice that cannot
+    /// possibly apply when the base suite is already red, and the same sentence
+    /// was printed for a failure the classifier had not even recognised.
+    ///
+    /// The rule here is that a cause WitDiff does not understand is reported as
+    /// unknown rather than diagnosed. Guessing produced a confidently wrong next
+    /// step that sent the reader looking for a problem they did not have.
+    pub fn remediation(self) -> Option<&'static str> {
+        Some(match self {
+            Self::BaseAlsoPasses => {
+                "The changed tests also pass on the base revision, so they do not pin the new behavior. Add an assertion that fails without the change."
+            }
+            Self::BaseControlFailed => {
+                "The pristine base revision does not pass the configured test command. Fix that first: no failure can be attributed to the changed tests until the base suite is green."
+            }
+            Self::UnrecognizedFailureKind => {
+                "WitDiff could not read this run's output. The configured framework's classifier does not recognise how this runner reports test failures, so it cannot tell an assertion failure from a build error. Check `verification.framework` matches the runner; if it does, this runner's output is not yet supported."
+            }
+            Self::TestDidNotCompileOnBase => {
+                "The changed test does not compile against the base revision, so its failure there is a compile error rather than a behavioural one. This is not proof of a test that pins the behavior."
+            }
+            Self::HeadTestsFailed => {
+                "The test command fails on the current workspace. Fix that first: WitDiff cannot attribute a base failure to a test that is already failing here."
+            }
+            // The remaining reasons are verified outcomes or internal detail:
+            // the status already says what to do, or there is nothing to do.
+            _ => return None,
+        })
     }
 }
 
@@ -464,6 +504,17 @@ impl Receipt {
         }
         None
     }
+
+    /// What the reader should do about this receipt.
+    ///
+    /// Prefers the reason-specific advice, because several causes share the
+    /// `not_verified` status and only one of them is the cause here. Falls back
+    /// to the status text, which is the generic wording.
+    pub fn remediation(&self) -> &'static str {
+        self.reason
+            .remediation()
+            .unwrap_or_else(|| self.status.remediation())
+    }
 }
 
 impl RunResult {
@@ -546,6 +597,12 @@ impl VerificationStatus {
     /// A diagnosis without a next step is what makes a verification tool get
     /// ignored. Every non-verified status gets a concrete action, and the
     /// verified ones say so plainly rather than inventing work.
+    ///
+    /// This is the status-level text. `Receipt::remediation` prefers the
+    /// reason-specific text where one exists, because several distinct causes
+    /// share the `not_verified` status and only one of them can be the cause
+    /// here. The text at `NotVerified` is therefore the generic fallback, and
+    /// it is deliberately worded as possibilities rather than a diagnosis.
     pub fn remediation(&self) -> &'static str {
         match self {
             Self::Verified => {
@@ -555,7 +612,7 @@ impl VerificationStatus {
                 "Read the integrity findings above. Each named rule describes something the change did to the tests."
             }
             Self::NotVerified => {
-                "The tests do not yet prove this change. Usual causes: the test passes on the base revision too, so it does not pin the new behavior (add an assertion that fails without the change); or the base revision itself does not pass, so no failure can be attributed to the test."
+                "The tests do not yet prove this change. Either they also pass on the base revision, so they do not pin the new behavior, or something other than an assertion stopped the base run from being read as a test failure. Read the reason above: it says which."
             }
             Self::NoChangedTests => {
                 "No dedicated test file changed, so no proof was attempted. This is not a failure. If the change should be covered, add or update a test; if it is a refactor or documentation change, nothing is needed."
@@ -688,6 +745,14 @@ pub struct Receipt {
     /// a fact and not a failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<ReceiptSignature>,
+    /// Whether a signing key was configured for this run.
+    ///
+    /// Additive in v1 and omitted when signing was not requested. Recorded so
+    /// `signature: absent` is distinguishable from "unsigned because a key
+    /// was asked for and the signing failed" — the case
+    /// `signing_failure_exit_code` acts on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signing_requested: bool,
     /// Changed-code mutation evidence, when enabled.
     ///
     /// Supplementary only: this field never affects `status` (ADR-0011).
@@ -1360,18 +1425,112 @@ mod remediation_tests {
         }
     }
 
-    /// The one that matters most in practice: the single most common
-    /// AI-authored failure is a test that passes on the base revision too.
+    /// The generic `not_verified` text is the fallback, so it must stay
+    /// actionable without asserting a cause. The specific causes live in
+    /// [`Reason::remediation`], which is what a receipt actually prints.
     #[test]
-    fn not_verified_explains_the_most_common_cause() {
+    fn not_verified_text_is_a_fallback_not_a_diagnosis() {
         let text = VerificationStatus::NotVerified.remediation();
         assert!(
-            text.contains("passes on the base revision"),
-            "the most common cause must be named, got {text:?}"
+            text.contains("pass on the base revision"),
+            "the most common cause must still be named, got {text:?}"
+        );
+        // It must not tell the reader to change something when the cause may
+        // be something else entirely. Measured: this exact sentence was printed
+        // for a base-control failure, where adding an assertion cannot help.
+        assert!(
+            !text.contains("add an assertion"),
+            "the generic text must not prescribe a fix for an unknown cause, got {text:?}"
+        );
+    }
+
+    /// The reason-specific text is what a receipt prints, and it must be the one
+    /// that actually applies. These are the cases where the generic sentence was
+    /// actively misleading.
+    #[test]
+    fn each_reason_carries_its_own_advice() {
+        // A base suite that is already red: "add an assertion that fails" cannot
+        // possibly help, because the base is not green to begin with.
+        let base_control = Reason::BaseControlFailed.remediation().expect("advice");
+        assert!(
+            !base_control.to_lowercase().contains("add an assertion"),
+            "a red base suite must not be told to add an assertion: {base_control:?}"
+        );
+
+        // The classifier could not read the run. The honest answer is that, not
+        // a guess about what the tests did.
+        let unknown = Reason::UnrecognizedFailureKind
+            .remediation()
+            .expect("advice");
+        assert!(
+            unknown.contains("could not read"),
+            "an unread run must be reported as unread, got {unknown:?}"
         );
         assert!(
-            text.to_lowercase().contains("add an assertion"),
-            "the reader needs a concrete action, got {text:?}"
+            !unknown.contains("passes on the base revision"),
+            "an unread run must not be diagnosed as a weak test, got {unknown:?}"
+        );
+        assert!(
+            !unknown.contains("add an assertion"),
+            "an unread run must not be diagnosed, got {unknown:?}"
+        );
+
+        // The two causes a receipt actually distinguishes.
+        let weak = Reason::BaseAlsoPasses.remediation().expect("advice");
+        assert!(
+            weak.to_lowercase().contains("add an assertion"),
+            "the genuinely weak-test case must still name the action, got {weak:?}"
+        );
+        let head = Reason::HeadTestsFailed.remediation().expect("advice");
+        assert!(
+            head.contains("current workspace"),
+            "a failing head has its own remedy, got {head:?}"
+        );
+
+        // Verified outcomes have no advice to give, and must fall back to the
+        // status rather than inventing something.
+        assert!(Reason::Proven.remediation().is_none());
+    }
+
+    /// A receipt prints the reason's advice when it has one. This is the
+    /// regression: the same sentence was printed for every non-verified status.
+    #[test]
+    fn a_receipt_prefers_its_reason_specific_advice() {
+        let mut receipt: Receipt = serde_json::from_value(serde_json::json!({
+            "schema_version": "witdiff.receipt.v1",
+            "generated_at": "2024-01-01T00:00:00Z",
+            "status": "not_verified",
+            "repo_root": "/repo",
+            "base": "HEAD~1",
+            "head_commit": "abc123",
+            "workspace_fingerprint_before": "aa",
+            "workspace_fingerprint_after": "aa",
+            "evidence_fresh": true,
+            "changed_files": [],
+            "changed_test_files": [],
+            "integrity_findings": [],
+            "head_run": {
+                "command": ["node", "--test"], "cwd": "/repo", "success": false,
+                "exit_code": 1, "duration_ms": 1, "stdout": "", "stderr": "",
+                "failure_kind": null
+            },
+            "base_run": null,
+            "red_green_proven": false,
+            "notes": []
+        }))
+        .expect("the fixture must be a valid receipt");
+        receipt.reason = Reason::UnrecognizedFailureKind;
+        let text = receipt.remediation();
+        assert!(
+            text.contains("could not read"),
+            "a receipt must print the advice for its own reason, got {text:?}"
+        );
+
+        // And a reason with no specific advice still prints something usable.
+        receipt.reason = Reason::Proven;
+        assert_eq!(
+            receipt.remediation(),
+            VerificationStatus::NotVerified.remediation()
         );
     }
 
@@ -1544,6 +1703,7 @@ mod freshness_tests {
         let all = [
             Reason::Proven,
             Reason::ProvenWithIntegrityWarnings,
+            Reason::StaleEvidence,
             Reason::BaseAlsoPasses,
             Reason::BaseControlFailed,
             Reason::BaseControlTimedOut,
@@ -1597,6 +1757,7 @@ mod freshness_tests {
         let tokens = [
             Reason::Proven.as_str(),
             Reason::ProvenWithIntegrityWarnings.as_str(),
+            Reason::StaleEvidence.as_str(),
             Reason::BaseAlsoPasses.as_str(),
             Reason::BaseControlFailed.as_str(),
             Reason::BaseControlTimedOut.as_str(),
@@ -1658,6 +1819,7 @@ mod freshness_tests {
         for reason in [
             Reason::Proven,
             Reason::ProvenWithIntegrityWarnings,
+            Reason::StaleEvidence,
             Reason::BaseAlsoPasses,
             Reason::BaseControlFailed,
             Reason::BaseControlTimedOut,

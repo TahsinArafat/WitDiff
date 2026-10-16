@@ -63,7 +63,10 @@ same script and behave identically; the URL form is the one that works if you
 only have the binary.
 
 **Updating.** `witdiff doctor` prints the installed version and tells you when a
-newer release exists on your channel. It does not install anything, and it never
+newer release exists on your channel. It also reports which test framework
+WitDiff will use, and whether that was read from a `witdiff.toml` (`ok`) or
+inferred from the repository (`inferred`) — an inferred classifier is a starting
+point to confirm, not a verified one. It does not install anything, and it never
 runs during `verify` — verification stays offline and a receipt always describes
 the tool that produced it. To take an update:
 
@@ -220,8 +223,8 @@ PHP (PHPUnit, Pest).
 
 **Test-integrity findings** — a change that weakens its own tests is reported:
 removed or trivialized assertions, changed expectations, newly skipped tests,
-removed error checks, removed `match` arms. Structural, through a real parser
-for all seven languages.
+removed error checks, removed `match` arms. Structural, through each
+language's own parser or tokenizer, for all seven languages.
 
 **Supplementary evidence**, neither of which changes the verdict:
 
@@ -262,7 +265,7 @@ annotates pull requests, and an [MCP server](crates/witdiff-mcp) exposing
 | [Receipt format](docs/receipt.md) | Every field a consumer can rely on |
 | [Quickstart](docs/quickstart.md) | A first run, step by step |
 | [Roadmap](docs/roadmap.md) | What is done, and what is next |
-| [Architecture decisions](docs/decisions.md) | The 22 ADRs behind the design |
+| [Architecture decisions](docs/decisions.md) | The ADRs behind the design |
 | [Working on WitDiff](AGENTS.md) | The engineering contract for contributors |
 
 ## Principles

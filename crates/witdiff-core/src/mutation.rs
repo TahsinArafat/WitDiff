@@ -805,4 +805,50 @@ mod tests {
             "the mutation must land on the operator, not inside the comment"
         );
     }
+
+    /// The schema's operator enum and the code's must not drift, in either
+    /// direction. A receipt whose operator the schema forbids fails client
+    /// validation, and the failure is silent until a client trips over it:
+    /// `condition_negation` and `numeric_substitution` shipped this way.
+    #[test]
+    fn the_schema_operator_enum_matches_the_code() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|crates| crates.parent())
+            .map(|root| root.join("schemas/witdiff.receipt.v1.schema.json"))
+            .expect("schema path");
+        let schema: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("JSON");
+        // `$defs/mutation_report.results.items` refs `$defs/mutant_result`,
+        // which is where the operator enum lives.
+        let schema_tokens: Vec<String> = schema["$defs"]["mutant_result"]["properties"]["operator"]
+            ["enum"]
+            .as_array()
+            .expect("operator enum in schema")
+            .iter()
+            .map(|value| value.as_str().expect("a string token").to_owned())
+            .collect();
+
+        let all = [
+            Operator::EqualityFlip,
+            Operator::ComparisonBoundary,
+            Operator::LogicalFlip,
+            Operator::BooleanFlip,
+            Operator::ConditionNegation,
+            Operator::NumericSubstitution,
+        ];
+        for operator in all {
+            assert!(
+                schema_tokens.contains(&operator.as_str().to_owned()),
+                "`{}` is emitted by the tool but missing from the receipt schema",
+                operator.as_str()
+            );
+        }
+        for token in &schema_tokens {
+            assert!(
+                all.iter().any(|operator| operator.as_str() == token),
+                "the schema names `{token}`, which the code never emits"
+            );
+        }
+    }
 }
